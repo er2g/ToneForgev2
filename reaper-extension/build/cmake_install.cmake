@@ -1,8 +1,8 @@
-# Install script for directory: C:/Users/31/Desktop/ToneForge/reaper-extension
+# Install script for directory: C:/Users/31/Documents/ToneForgev2/reaper-extension
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
-  set(CMAKE_INSTALL_PREFIX "C:/Program Files/reaper_toneforge")
+  set(CMAKE_INSTALL_PREFIX "C:/Program Files (x86)/reaper_toneforge")
 endif()
 string(REGEX REPLACE "/$" "" CMAKE_INSTALL_PREFIX "${CMAKE_INSTALL_PREFIX}")
 
@@ -42,7 +42,7 @@ if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT
     if(CMAKE_ERROR_ON_ABSOLUTE_INSTALL_DESTINATION)
       message(FATAL_ERROR "ABSOLUTE path INSTALL DESTINATION forbidden (by caller): ${CMAKE_ABSOLUTE_DESTINATION_FILES}")
     endif()
-    file(INSTALL DESTINATION "C:/Users/31/AppData/Roaming/REAPER/UserPlugins" TYPE SHARED_LIBRARY FILES "C:/Users/31/Desktop/ToneForge/reaper-extension/build/bin/Debug/reaper_toneforge.dll")
+    file(INSTALL DESTINATION "C:/Users/31/AppData/Roaming/REAPER/UserPlugins" TYPE SHARED_LIBRARY FILES "C:/Users/31/Documents/ToneForgev2/reaper-extension/build/bin/Debug/reaper_toneforge.dll")
   elseif(CMAKE_INSTALL_CONFIG_NAME MATCHES "^([Rr][Ee][Ll][Ee][Aa][Ss][Ee])$")
     list(APPEND CMAKE_ABSOLUTE_DESTINATION_FILES
      "C:/Users/31/AppData/Roaming/REAPER/UserPlugins/reaper_toneforge.dll")
@@ -52,7 +52,7 @@ if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT
     if(CMAKE_ERROR_ON_ABSOLUTE_INSTALL_DESTINATION)
       message(FATAL_ERROR "ABSOLUTE path INSTALL DESTINATION forbidden (by caller): ${CMAKE_ABSOLUTE_DESTINATION_FILES}")
     endif()
-    file(INSTALL DESTINATION "C:/Users/31/AppData/Roaming/REAPER/UserPlugins" TYPE SHARED_LIBRARY FILES "C:/Users/31/Desktop/ToneForge/reaper-extension/build/bin/Release/reaper_toneforge.dll")
+    file(INSTALL DESTINATION "C:/Users/31/AppData/Roaming/REAPER/UserPlugins" TYPE SHARED_LIBRARY FILES "C:/Users/31/Documents/ToneForgev2/reaper-extension/build/bin/Release/reaper_toneforge.dll")
   elseif(CMAKE_INSTALL_CONFIG_NAME MATCHES "^([Mm][Ii][Nn][Ss][Ii][Zz][Ee][Rr][Ee][Ll])$")
     list(APPEND CMAKE_ABSOLUTE_DESTINATION_FILES
      "C:/Users/31/AppData/Roaming/REAPER/UserPlugins/reaper_toneforge.dll")
@@ -62,7 +62,7 @@ if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT
     if(CMAKE_ERROR_ON_ABSOLUTE_INSTALL_DESTINATION)
       message(FATAL_ERROR "ABSOLUTE path INSTALL DESTINATION forbidden (by caller): ${CMAKE_ABSOLUTE_DESTINATION_FILES}")
     endif()
-    file(INSTALL DESTINATION "C:/Users/31/AppData/Roaming/REAPER/UserPlugins" TYPE SHARED_LIBRARY FILES "C:/Users/31/Desktop/ToneForge/reaper-extension/build/bin/MinSizeRel/reaper_toneforge.dll")
+    file(INSTALL DESTINATION "C:/Users/31/AppData/Roaming/REAPER/UserPlugins" TYPE SHARED_LIBRARY FILES "C:/Users/31/Documents/ToneForgev2/reaper-extension/build/bin/MinSizeRel/reaper_toneforge.dll")
   elseif(CMAKE_INSTALL_CONFIG_NAME MATCHES "^([Rr][Ee][Ll][Ww][Ii][Tt][Hh][Dd][Ee][Bb][Ii][Nn][Ff][Oo])$")
     list(APPEND CMAKE_ABSOLUTE_DESTINATION_FILES
      "C:/Users/31/AppData/Roaming/REAPER/UserPlugins/reaper_toneforge.dll")
@@ -72,14 +72,14 @@ if(CMAKE_INSTALL_COMPONENT STREQUAL "Unspecified" OR NOT CMAKE_INSTALL_COMPONENT
     if(CMAKE_ERROR_ON_ABSOLUTE_INSTALL_DESTINATION)
       message(FATAL_ERROR "ABSOLUTE path INSTALL DESTINATION forbidden (by caller): ${CMAKE_ABSOLUTE_DESTINATION_FILES}")
     endif()
-    file(INSTALL DESTINATION "C:/Users/31/AppData/Roaming/REAPER/UserPlugins" TYPE SHARED_LIBRARY FILES "C:/Users/31/Desktop/ToneForge/reaper-extension/build/bin/RelWithDebInfo/reaper_toneforge.dll")
+    file(INSTALL DESTINATION "C:/Users/31/AppData/Roaming/REAPER/UserPlugins" TYPE SHARED_LIBRARY FILES "C:/Users/31/Documents/ToneForgev2/reaper-extension/build/bin/RelWithDebInfo/reaper_toneforge.dll")
   endif()
 endif()
 
 string(REPLACE ";" "\n" CMAKE_INSTALL_MANIFEST_CONTENT
        "${CMAKE_INSTALL_MANIFEST_FILES}")
 if(CMAKE_INSTALL_LOCAL_ONLY)
-  file(WRITE "C:/Users/31/Desktop/ToneForge/reaper-extension/build/install_local_manifest.txt"
+  file(WRITE "C:/Users/31/Documents/ToneForgev2/reaper-extension/build/install_local_manifest.txt"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")
 endif()
 if(CMAKE_INSTALL_COMPONENT)
@@ -95,6 +95,6 @@ else()
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
-  file(WRITE "C:/Users/31/Desktop/ToneForge/reaper-extension/build/${CMAKE_INSTALL_MANIFEST}"
+  file(WRITE "C:/Users/31/Documents/ToneForgev2/reaper-extension/build/${CMAKE_INSTALL_MANIFEST}"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")
 endif()

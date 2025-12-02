@@ -35,6 +35,7 @@ events:
     found: "C:/Program Files/CMake/share/cmake-4.2/Modules/CMakeCCompilerId.c.in"
     search_context:
       ENV{PATH}:
+        - "C:\\Users\\31\\AppData\\Local\\Temp\\.tmpCYyvPH"
         - "C:\\Python314\\Scripts\\"
         - "C:\\Python314\\"
         - "C:\\Windows\\system32"
@@ -61,6 +62,7 @@ events:
         - "C:\\Users\\31\\.bun\\bin"
         - "C:\\Users\\31\\AppData\\Local\\Microsoft\\WinGet\\Packages\\astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe"
         - "C:\\Users\\31\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
+        - "c:\\Users\\31\\.vscode\\extensions\\openai.chatgpt-0.4.46-win32-x64\\bin\\windows-x86_64"
   -
     kind: "message-v1"
     backtrace:
@@ -77,9 +79,9 @@ events:
       The output was:
       0
       .NET Framework i├ºin MSBuild s├╝r├╝m 17.14.23+b0019275e
-      Olu┼ƒturma ba┼ƒlat─▒ld─▒: 12/1/2025 8:46:53 AM.
+      Olu┼ƒturma ba┼ƒlat─▒ld─▒: 12/2/2025 9:23:37 PM.
       
-      1 d├╝─ƒ├╝m├╝nde "C:\\Users\\31\\Desktop\\ToneForge\\reaper-extension\\build\\CMakeFiles\\4.2.0\\CompilerIdC\\CompilerIdC.vcxproj" projesi (varsay─▒lan hedefler).
+      1 d├╝─ƒ├╝m├╝nde "C:\\Users\\31\\Documents\\ToneForgev2\\reaper-extension\\build\\CMakeFiles\\4.2.0\\CompilerIdC\\CompilerIdC.vcxproj" projesi (varsay─▒lan hedefler).
       PrepareForBuild:
         "Debug\\" dizini olu┼ƒturuluyor.
         Yap─▒land─▒r─▒lm─▒┼ƒ ├º─▒k─▒┼ƒ etkinle┼ƒtirildi. Derleyici tan─▒lamas─▒n─▒n bi├ºimlendirmesi hata hiyerar┼ƒisini yans─▒t─▒r. Daha fazla ayr─▒nt─▒ i├ºin bkz. https://aka.ms/cpp/structured-output.
@@ -92,7 +94,7 @@ events:
         CMakeCCompilerId.c
       Link:
         C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\link.exe /ERRORREPORT:QUEUE /OUT:".\\CompilerIdC.exe" /INCREMENTAL:NO /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /PDB:".\\CompilerIdC.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /DYNAMICBASE /NXCOMPAT /IMPLIB:".\\CompilerIdC.lib" /MACHINE:X64 Debug\\CMakeCCompilerId.obj
-        CompilerIdC.vcxproj -> C:\\Users\\31\\Desktop\\ToneForge\\reaper-extension\\build\\CMakeFiles\\4.2.0\\CompilerIdC\\CompilerIdC.exe
+        CompilerIdC.vcxproj -> C:\\Users\\31\\Documents\\ToneForgev2\\reaper-extension\\build\\CMakeFiles\\4.2.0\\CompilerIdC\\CompilerIdC.exe
       PostBuildEvent:
         for %%i in (cl.exe) do @echo CMAKE_C_COMPILER=%%~$PATH:i
         :VCEnd
@@ -100,13 +102,13 @@ events:
       FinalizeBuildStatus:
         "Debug\\CompilerIdC.tlog\\unsuccessfulbuild" dosyas─▒ siliniyor.
         "Debug\\CompilerIdC.tlog\\CompilerIdC.lastbuildstate" ├╢─ƒesine eri┼ƒiliyor.
-      "C:\\Users\\31\\Desktop\\ToneForge\\reaper-extension\\build\\CMakeFiles\\4.2.0\\CompilerIdC\\CompilerIdC.vcxproj" Projesini Olu┼ƒturma ─░┼ƒlemi Tamamland─▒ (varsay─▒lan hedefler).
+      "C:\\Users\\31\\Documents\\ToneForgev2\\reaper-extension\\build\\CMakeFiles\\4.2.0\\CompilerIdC\\CompilerIdC.vcxproj" Projesini Olu┼ƒturma ─░┼ƒlemi Tamamland─▒ (varsay─▒lan hedefler).
       
       Olu┼ƒturma ba┼ƒar─▒l─▒ oldu.
           0 Uyar─▒
           0 Hata
       
-      Ge├ºen S├╝re 00:00:00.93
+      Ge├ºen S├╝re 00:00:02.24
       
       
       Compilation of the C compiler identification source "CMakeCCompilerId.c" produced "CompilerIdC.exe"
@@ -114,7 +116,7 @@ events:
       Compilation of the C compiler identification source "CMakeCCompilerId.c" produced "CompilerIdC.vcxproj"
       
       The C compiler identification is MSVC, found in:
-        C:/Users/31/Desktop/ToneForge/reaper-extension/build/CMakeFiles/4.2.0/CompilerIdC/CompilerIdC.exe
+        C:/Users/31/Documents/ToneForgev2/reaper-extension/build/CMakeFiles/4.2.0/CompilerIdC/CompilerIdC.exe
       
   -
     kind: "find-v1"
@@ -139,6 +141,7 @@ events:
       - "link"
     candidate_directories:
       - "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/"
+      - "C:/Users/31/AppData/Local/Temp/.tmpCYyvPH/"
       - "C:/Python314/Scripts/"
       - "C:/Python314/"
       - "C:/Windows/System32/"
@@ -165,11 +168,13 @@ events:
       - "C:/Users/31/.bun/bin/"
       - "C:/Users/31/AppData/Local/Microsoft/WinGet/Packages/astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe/"
       - "C:/Users/31/AppData/Local/Programs/Microsoft VS Code/bin/"
+      - "C:/Users/31/.vscode/extensions/openai.chatgpt-0.4.46-win32-x64/bin/windows-x86_64/"
     searched_directories:
       - "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/link.com"
     found: "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/link.exe"
     search_context:
       ENV{PATH}:
+        - "C:\\Users\\31\\AppData\\Local\\Temp\\.tmpCYyvPH"
         - "C:\\Python314\\Scripts\\"
         - "C:\\Python314\\"
         - "C:\\Windows\\system32"
@@ -196,6 +201,7 @@ events:
         - "C:\\Users\\31\\.bun\\bin"
         - "C:\\Users\\31\\AppData\\Local\\Microsoft\\WinGet\\Packages\\astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe"
         - "C:\\Users\\31\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
+        - "c:\\Users\\31\\.vscode\\extensions\\openai.chatgpt-0.4.46-win32-x64\\bin\\windows-x86_64"
   -
     kind: "find-v1"
     backtrace:
@@ -219,6 +225,7 @@ events:
       - "lld-link"
     candidate_directories:
       - "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/"
+      - "C:/Users/31/AppData/Local/Temp/.tmpCYyvPH/"
       - "C:/Python314/Scripts/"
       - "C:/Python314/"
       - "C:/Windows/System32/"
@@ -245,10 +252,14 @@ events:
       - "C:/Users/31/.bun/bin/"
       - "C:/Users/31/AppData/Local/Microsoft/WinGet/Packages/astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe/"
       - "C:/Users/31/AppData/Local/Programs/Microsoft VS Code/bin/"
+      - "C:/Users/31/.vscode/extensions/openai.chatgpt-0.4.46-win32-x64/bin/windows-x86_64/"
     searched_directories:
       - "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/lld-link.com"
       - "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/lld-link.exe"
       - "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/lld-link"
+      - "C:/Users/31/AppData/Local/Temp/.tmpCYyvPH/lld-link.com"
+      - "C:/Users/31/AppData/Local/Temp/.tmpCYyvPH/lld-link.exe"
+      - "C:/Users/31/AppData/Local/Temp/.tmpCYyvPH/lld-link"
       - "C:/Python314/Scripts/lld-link.com"
       - "C:/Python314/Scripts/lld-link.exe"
       - "C:/Python314/Scripts/lld-link"
@@ -295,6 +306,7 @@ events:
     found: "C:/Program Files/LLVM/bin/lld-link.exe"
     search_context:
       ENV{PATH}:
+        - "C:\\Users\\31\\AppData\\Local\\Temp\\.tmpCYyvPH"
         - "C:\\Python314\\Scripts\\"
         - "C:\\Python314\\"
         - "C:\\Windows\\system32"
@@ -321,6 +333,7 @@ events:
         - "C:\\Users\\31\\.bun\\bin"
         - "C:\\Users\\31\\AppData\\Local\\Microsoft\\WinGet\\Packages\\astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe"
         - "C:\\Users\\31\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
+        - "c:\\Users\\31\\.vscode\\extensions\\openai.chatgpt-0.4.46-win32-x64\\bin\\windows-x86_64"
   -
     kind: "find-v1"
     backtrace:
@@ -342,6 +355,7 @@ events:
       - "link"
     candidate_directories:
       - "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/"
+      - "C:/Users/31/AppData/Local/Temp/.tmpCYyvPH/"
       - "C:/Python314/Scripts/"
       - "C:/Python314/"
       - "C:/Windows/System32/"
@@ -368,11 +382,13 @@ events:
       - "C:/Users/31/.bun/bin/"
       - "C:/Users/31/AppData/Local/Microsoft/WinGet/Packages/astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe/"
       - "C:/Users/31/AppData/Local/Programs/Microsoft VS Code/bin/"
+      - "C:/Users/31/.vscode/extensions/openai.chatgpt-0.4.46-win32-x64/bin/windows-x86_64/"
     searched_directories:
       - "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/link.com"
     found: "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/link.exe"
     search_context:
       ENV{PATH}:
+        - "C:\\Users\\31\\AppData\\Local\\Temp\\.tmpCYyvPH"
         - "C:\\Python314\\Scripts\\"
         - "C:\\Python314\\"
         - "C:\\Windows\\system32"
@@ -399,6 +415,7 @@ events:
         - "C:\\Users\\31\\.bun\\bin"
         - "C:\\Users\\31\\AppData\\Local\\Microsoft\\WinGet\\Packages\\astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe"
         - "C:\\Users\\31\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
+        - "c:\\Users\\31\\.vscode\\extensions\\openai.chatgpt-0.4.46-win32-x64\\bin\\windows-x86_64"
   -
     kind: "find-v1"
     backtrace:
@@ -420,6 +437,7 @@ events:
       - "mt"
     candidate_directories:
       - "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/"
+      - "C:/Users/31/AppData/Local/Temp/.tmpCYyvPH/"
       - "C:/Python314/Scripts/"
       - "C:/Python314/"
       - "C:/Windows/System32/"
@@ -446,10 +464,14 @@ events:
       - "C:/Users/31/.bun/bin/"
       - "C:/Users/31/AppData/Local/Microsoft/WinGet/Packages/astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe/"
       - "C:/Users/31/AppData/Local/Programs/Microsoft VS Code/bin/"
+      - "C:/Users/31/.vscode/extensions/openai.chatgpt-0.4.46-win32-x64/bin/windows-x86_64/"
     searched_directories:
       - "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/mt.com"
       - "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/mt.exe"
       - "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/mt"
+      - "C:/Users/31/AppData/Local/Temp/.tmpCYyvPH/mt.com"
+      - "C:/Users/31/AppData/Local/Temp/.tmpCYyvPH/mt.exe"
+      - "C:/Users/31/AppData/Local/Temp/.tmpCYyvPH/mt"
       - "C:/Python314/Scripts/mt.com"
       - "C:/Python314/Scripts/mt.exe"
       - "C:/Python314/Scripts/mt"
@@ -528,9 +550,13 @@ events:
       - "C:/Users/31/AppData/Local/Programs/Microsoft VS Code/bin/mt.com"
       - "C:/Users/31/AppData/Local/Programs/Microsoft VS Code/bin/mt.exe"
       - "C:/Users/31/AppData/Local/Programs/Microsoft VS Code/bin/mt"
+      - "C:/Users/31/.vscode/extensions/openai.chatgpt-0.4.46-win32-x64/bin/windows-x86_64/mt.com"
+      - "C:/Users/31/.vscode/extensions/openai.chatgpt-0.4.46-win32-x64/bin/windows-x86_64/mt.exe"
+      - "C:/Users/31/.vscode/extensions/openai.chatgpt-0.4.46-win32-x64/bin/windows-x86_64/mt"
     found: false
     search_context:
       ENV{PATH}:
+        - "C:\\Users\\31\\AppData\\Local\\Temp\\.tmpCYyvPH"
         - "C:\\Python314\\Scripts\\"
         - "C:\\Python314\\"
         - "C:\\Windows\\system32"
@@ -557,6 +583,7 @@ events:
         - "C:\\Users\\31\\.bun\\bin"
         - "C:\\Users\\31\\AppData\\Local\\Microsoft\\WinGet\\Packages\\astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe"
         - "C:\\Users\\31\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
+        - "c:\\Users\\31\\.vscode\\extensions\\openai.chatgpt-0.4.46-win32-x64\\bin\\windows-x86_64"
   -
     kind: "find-v1"
     backtrace:
@@ -578,6 +605,7 @@ events:
       - "lib"
     candidate_directories:
       - "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/"
+      - "C:/Users/31/AppData/Local/Temp/.tmpCYyvPH/"
       - "C:/Python314/Scripts/"
       - "C:/Python314/"
       - "C:/Windows/System32/"
@@ -604,11 +632,13 @@ events:
       - "C:/Users/31/.bun/bin/"
       - "C:/Users/31/AppData/Local/Microsoft/WinGet/Packages/astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe/"
       - "C:/Users/31/AppData/Local/Programs/Microsoft VS Code/bin/"
+      - "C:/Users/31/.vscode/extensions/openai.chatgpt-0.4.46-win32-x64/bin/windows-x86_64/"
     searched_directories:
       - "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/lib.com"
     found: "C:/Program Files/Microsoft Visual Studio/2022/Community/VC/Tools/MSVC/14.44.35207/bin/Hostx64/x64/lib.exe"
     search_context:
       ENV{PATH}:
+        - "C:\\Users\\31\\AppData\\Local\\Temp\\.tmpCYyvPH"
         - "C:\\Python314\\Scripts\\"
         - "C:\\Python314\\"
         - "C:\\Windows\\system32"
@@ -635,6 +665,7 @@ events:
         - "C:\\Users\\31\\.bun\\bin"
         - "C:\\Users\\31\\AppData\\Local\\Microsoft\\WinGet\\Packages\\astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe"
         - "C:\\Users\\31\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
+        - "c:\\Users\\31\\.vscode\\extensions\\openai.chatgpt-0.4.46-win32-x64\\bin\\windows-x86_64"
   -
     kind: "find-v1"
     backtrace:
@@ -662,6 +693,7 @@ events:
     found: "C:/Program Files/CMake/share/cmake-4.2/Modules/CMakeCXXCompilerId.cpp.in"
     search_context:
       ENV{PATH}:
+        - "C:\\Users\\31\\AppData\\Local\\Temp\\.tmpCYyvPH"
         - "C:\\Python314\\Scripts\\"
         - "C:\\Python314\\"
         - "C:\\Windows\\system32"
@@ -688,6 +720,7 @@ events:
         - "C:\\Users\\31\\.bun\\bin"
         - "C:\\Users\\31\\AppData\\Local\\Microsoft\\WinGet\\Packages\\astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe"
         - "C:\\Users\\31\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
+        - "c:\\Users\\31\\.vscode\\extensions\\openai.chatgpt-0.4.46-win32-x64\\bin\\windows-x86_64"
   -
     kind: "message-v1"
     backtrace:
@@ -704,9 +737,9 @@ events:
       The output was:
       0
       .NET Framework i├ºin MSBuild s├╝r├╝m 17.14.23+b0019275e
-      Olu┼ƒturma ba┼ƒlat─▒ld─▒: 12/1/2025 8:46:54 AM.
+      Olu┼ƒturma ba┼ƒlat─▒ld─▒: 12/2/2025 9:23:40 PM.
       
-      1 d├╝─ƒ├╝m├╝nde "C:\\Users\\31\\Desktop\\ToneForge\\reaper-extension\\build\\CMakeFiles\\4.2.0\\CompilerIdCXX\\CompilerIdCXX.vcxproj" projesi (varsay─▒lan hedefler).
+      1 d├╝─ƒ├╝m├╝nde "C:\\Users\\31\\Documents\\ToneForgev2\\reaper-extension\\build\\CMakeFiles\\4.2.0\\CompilerIdCXX\\CompilerIdCXX.vcxproj" projesi (varsay─▒lan hedefler).
       PrepareForBuild:
         "Debug\\" dizini olu┼ƒturuluyor.
         Yap─▒land─▒r─▒lm─▒┼ƒ ├º─▒k─▒┼ƒ etkinle┼ƒtirildi. Derleyici tan─▒lamas─▒n─▒n bi├ºimlendirmesi hata hiyerar┼ƒisini yans─▒t─▒r. Daha fazla ayr─▒nt─▒ i├ºin bkz. https://aka.ms/cpp/structured-output.
@@ -719,7 +752,7 @@ events:
         CMakeCXXCompilerId.cpp
       Link:
         C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\link.exe /ERRORREPORT:QUEUE /OUT:".\\CompilerIdCXX.exe" /INCREMENTAL:NO /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib comdlg32.lib advapi32.lib shell32.lib ole32.lib oleaut32.lib uuid.lib odbc32.lib odbccp32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /PDB:".\\CompilerIdCXX.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /DYNAMICBASE /NXCOMPAT /IMPLIB:".\\CompilerIdCXX.lib" /MACHINE:X64 Debug\\CMakeCXXCompilerId.obj
-        CompilerIdCXX.vcxproj -> C:\\Users\\31\\Desktop\\ToneForge\\reaper-extension\\build\\CMakeFiles\\4.2.0\\CompilerIdCXX\\CompilerIdCXX.exe
+        CompilerIdCXX.vcxproj -> C:\\Users\\31\\Documents\\ToneForgev2\\reaper-extension\\build\\CMakeFiles\\4.2.0\\CompilerIdCXX\\CompilerIdCXX.exe
       PostBuildEvent:
         for %%i in (cl.exe) do @echo CMAKE_CXX_COMPILER=%%~$PATH:i
         :VCEnd
@@ -727,13 +760,13 @@ events:
       FinalizeBuildStatus:
         "Debug\\CompilerIdCXX.tlog\\unsuccessfulbuild" dosyas─▒ siliniyor.
         "Debug\\CompilerIdCXX.tlog\\CompilerIdCXX.lastbuildstate" ├╢─ƒesine eri┼ƒiliyor.
-      "C:\\Users\\31\\Desktop\\ToneForge\\reaper-extension\\build\\CMakeFiles\\4.2.0\\CompilerIdCXX\\CompilerIdCXX.vcxproj" Projesini Olu┼ƒturma ─░┼ƒlemi Tamamland─▒ (varsay─▒lan hedefler).
+      "C:\\Users\\31\\Documents\\ToneForgev2\\reaper-extension\\build\\CMakeFiles\\4.2.0\\CompilerIdCXX\\CompilerIdCXX.vcxproj" Projesini Olu┼ƒturma ─░┼ƒlemi Tamamland─▒ (varsay─▒lan hedefler).
       
       Olu┼ƒturma ba┼ƒar─▒l─▒ oldu.
           0 Uyar─▒
           0 Hata
       
-      Ge├ºen S├╝re 00:00:00.63
+      Ge├ºen S├╝re 00:00:01.81
       
       
       Compilation of the CXX compiler identification source "CMakeCXXCompilerId.cpp" produced "CompilerIdCXX.exe"
@@ -741,7 +774,7 @@ events:
       Compilation of the CXX compiler identification source "CMakeCXXCompilerId.cpp" produced "CompilerIdCXX.vcxproj"
       
       The CXX compiler identification is MSVC, found in:
-        C:/Users/31/Desktop/ToneForge/reaper-extension/build/CMakeFiles/4.2.0/CompilerIdCXX/CompilerIdCXX.exe
+        C:/Users/31/Documents/ToneForgev2/reaper-extension/build/CMakeFiles/4.2.0/CompilerIdCXX/CompilerIdCXX.exe
       
   -
     kind: "find-v1"
@@ -766,6 +799,7 @@ events:
     names:
       - "rc"
     candidate_directories:
+      - "C:/Users/31/AppData/Local/Temp/.tmpCYyvPH/"
       - "C:/Python314/Scripts/"
       - "C:/Python314/"
       - "C:/Windows/System32/"
@@ -792,6 +826,7 @@ events:
       - "C:/Users/31/.bun/bin/"
       - "C:/Users/31/AppData/Local/Microsoft/WinGet/Packages/astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe/"
       - "C:/Users/31/AppData/Local/Programs/Microsoft VS Code/bin/"
+      - "C:/Users/31/.vscode/extensions/openai.chatgpt-0.4.46-win32-x64/bin/windows-x86_64/"
       - "C:/Program Files/bin/"
       - "C:/Program Files/sbin/"
       - "C:/Program Files/"
@@ -801,10 +836,13 @@ events:
       - "C:/Program Files/CMake/bin/"
       - "C:/Program Files/CMake/sbin/"
       - "C:/Program Files/CMake/"
-      - "C:/Program Files/reaper_toneforge/bin/"
-      - "C:/Program Files/reaper_toneforge/sbin/"
-      - "C:/Program Files/reaper_toneforge/"
+      - "C:/Program Files (x86)/reaper_toneforge/bin/"
+      - "C:/Program Files (x86)/reaper_toneforge/sbin/"
+      - "C:/Program Files (x86)/reaper_toneforge/"
     searched_directories:
+      - "C:/Users/31/AppData/Local/Temp/.tmpCYyvPH/rc.com"
+      - "C:/Users/31/AppData/Local/Temp/.tmpCYyvPH/rc.exe"
+      - "C:/Users/31/AppData/Local/Temp/.tmpCYyvPH/rc"
       - "C:/Python314/Scripts/rc.com"
       - "C:/Python314/Scripts/rc.exe"
       - "C:/Python314/Scripts/rc"
@@ -883,6 +921,9 @@ events:
       - "C:/Users/31/AppData/Local/Programs/Microsoft VS Code/bin/rc.com"
       - "C:/Users/31/AppData/Local/Programs/Microsoft VS Code/bin/rc.exe"
       - "C:/Users/31/AppData/Local/Programs/Microsoft VS Code/bin/rc"
+      - "C:/Users/31/.vscode/extensions/openai.chatgpt-0.4.46-win32-x64/bin/windows-x86_64/rc.com"
+      - "C:/Users/31/.vscode/extensions/openai.chatgpt-0.4.46-win32-x64/bin/windows-x86_64/rc.exe"
+      - "C:/Users/31/.vscode/extensions/openai.chatgpt-0.4.46-win32-x64/bin/windows-x86_64/rc"
       - "C:/Program Files/bin/rc.com"
       - "C:/Program Files/bin/rc.exe"
       - "C:/Program Files/bin/rc"
@@ -910,18 +951,19 @@ events:
       - "C:/Program Files/CMake/rc.com"
       - "C:/Program Files/CMake/rc.exe"
       - "C:/Program Files/CMake/rc"
-      - "C:/Program Files/reaper_toneforge/bin/rc.com"
-      - "C:/Program Files/reaper_toneforge/bin/rc.exe"
-      - "C:/Program Files/reaper_toneforge/bin/rc"
-      - "C:/Program Files/reaper_toneforge/sbin/rc.com"
-      - "C:/Program Files/reaper_toneforge/sbin/rc.exe"
-      - "C:/Program Files/reaper_toneforge/sbin/rc"
-      - "C:/Program Files/reaper_toneforge/rc.com"
-      - "C:/Program Files/reaper_toneforge/rc.exe"
-      - "C:/Program Files/reaper_toneforge/rc"
+      - "C:/Program Files (x86)/reaper_toneforge/bin/rc.com"
+      - "C:/Program Files (x86)/reaper_toneforge/bin/rc.exe"
+      - "C:/Program Files (x86)/reaper_toneforge/bin/rc"
+      - "C:/Program Files (x86)/reaper_toneforge/sbin/rc.com"
+      - "C:/Program Files (x86)/reaper_toneforge/sbin/rc.exe"
+      - "C:/Program Files (x86)/reaper_toneforge/sbin/rc"
+      - "C:/Program Files (x86)/reaper_toneforge/rc.com"
+      - "C:/Program Files (x86)/reaper_toneforge/rc.exe"
+      - "C:/Program Files (x86)/reaper_toneforge/rc"
     found: false
     search_context:
       ENV{PATH}:
+        - "C:\\Users\\31\\AppData\\Local\\Temp\\.tmpCYyvPH"
         - "C:\\Python314\\Scripts\\"
         - "C:\\Python314\\"
         - "C:\\Windows\\system32"
@@ -948,12 +990,13 @@ events:
         - "C:\\Users\\31\\.bun\\bin"
         - "C:\\Users\\31\\AppData\\Local\\Microsoft\\WinGet\\Packages\\astral-sh.uv_Microsoft.Winget.Source_8wekyb3d8bbwe"
         - "C:\\Users\\31\\AppData\\Local\\Programs\\Microsoft VS Code\\bin"
-      CMAKE_INSTALL_PREFIX: "C:/Program Files/reaper_toneforge"
+        - "c:\\Users\\31\\.vscode\\extensions\\openai.chatgpt-0.4.46-win32-x64\\bin\\windows-x86_64"
+      CMAKE_INSTALL_PREFIX: "C:/Program Files (x86)/reaper_toneforge"
       CMAKE_SYSTEM_PREFIX_PATH:
         - "C:/Program Files"
         - "C:/Program Files (x86)"
         - "C:/Program Files/CMake"
-        - "C:/Program Files/reaper_toneforge"
+        - "C:/Program Files (x86)/reaper_toneforge"
   -
     kind: "try_compile-v1"
     backtrace:
@@ -963,8 +1006,8 @@ events:
     checks:
       - "Detecting C compiler ABI info"
     directories:
-      source: "C:/Users/31/Desktop/ToneForge/reaper-extension/build/CMakeFiles/CMakeScratch/TryCompile-q0n99h"
-      binary: "C:/Users/31/Desktop/ToneForge/reaper-extension/build/CMakeFiles/CMakeScratch/TryCompile-q0n99h"
+      source: "C:/Users/31/Documents/ToneForgev2/reaper-extension/build/CMakeFiles/CMakeScratch/TryCompile-wgx9jr"
+      binary: "C:/Users/31/Documents/ToneForgev2/reaper-extension/build/CMakeFiles/CMakeScratch/TryCompile-wgx9jr"
     cmakeVariables:
       CMAKE_C_FLAGS: "/DWIN32 /D_WINDOWS"
       CMAKE_C_FLAGS_DEBUG: "/Zi /Ob0 /Od /RTC1"
@@ -973,39 +1016,39 @@ events:
       variable: "CMAKE_C_ABI_COMPILED"
       cached: true
       stdout: |
-        Change Dir: 'C:/Users/31/Desktop/ToneForge/reaper-extension/build/CMakeFiles/CMakeScratch/TryCompile-q0n99h'
+        Change Dir: 'C:/Users/31/Documents/ToneForgev2/reaper-extension/build/CMakeFiles/CMakeScratch/TryCompile-wgx9jr'
         
-        Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_3fc7d.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=17.0 /v:n
+        Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_8ad94.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=17.0 /v:n
         .NET Framework i├ºin MSBuild s├╝r├╝m 17.14.23+b0019275e
-        Olu┼ƒturma ba┼ƒlat─▒ld─▒: 12/1/2025 8:46:55 AM.
+        Olu┼ƒturma ba┼ƒlat─▒ld─▒: 12/2/2025 9:23:43 PM.
         
-        1 d├╝─ƒ├╝m├╝nde "C:\\Users\\31\\Desktop\\ToneForge\\reaper-extension\\build\\CMakeFiles\\CMakeScratch\\TryCompile-q0n99h\\cmTC_3fc7d.vcxproj" projesi (varsay─▒lan hedefler).
+        1 d├╝─ƒ├╝m├╝nde "C:\\Users\\31\\Documents\\ToneForgev2\\reaper-extension\\build\\CMakeFiles\\CMakeScratch\\TryCompile-wgx9jr\\cmTC_8ad94.vcxproj" projesi (varsay─▒lan hedefler).
         PrepareForBuild:
           Yap─▒land─▒r─▒lm─▒┼ƒ ├º─▒k─▒┼ƒ etkinle┼ƒtirildi. Derleyici tan─▒lamas─▒n─▒n bi├ºimlendirmesi hata hiyerar┼ƒisini yans─▒t─▒r. Daha fazla ayr─▒nt─▒ i├ºin bkz. https://aka.ms/cpp/structured-output.
-          "C:\\Users\\31\\Desktop\\ToneForge\\reaper-extension\\build\\CMakeFiles\\CMakeScratch\\TryCompile-q0n99h\\Debug\\" dizini olu┼ƒturuluyor.
-          "cmTC_3fc7d.dir\\Debug\\cmTC_3fc7d.tlog\\" dizini olu┼ƒturuluyor.
+          "C:\\Users\\31\\Documents\\ToneForgev2\\reaper-extension\\build\\CMakeFiles\\CMakeScratch\\TryCompile-wgx9jr\\Debug\\" dizini olu┼ƒturuluyor.
+          "cmTC_8ad94.dir\\Debug\\cmTC_8ad94.tlog\\" dizini olu┼ƒturuluyor.
         InitializeBuildStatus:
-          "AlwaysCreate" belirtildi─ƒi i├ºin "cmTC_3fc7d.dir\\Debug\\cmTC_3fc7d.tlog\\unsuccessfulbuild" olu┼ƒturuluyor.
-          "cmTC_3fc7d.dir\\Debug\\cmTC_3fc7d.tlog\\unsuccessfulbuild" ├╢─ƒesine eri┼ƒiliyor.
+          "AlwaysCreate" belirtildi─ƒi i├ºin "cmTC_8ad94.dir\\Debug\\cmTC_8ad94.tlog\\unsuccessfulbuild" olu┼ƒturuluyor.
+          "cmTC_8ad94.dir\\Debug\\cmTC_8ad94.tlog\\unsuccessfulbuild" ├╢─ƒesine eri┼ƒiliyor.
         ClCompile:
-          C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_3fc7d.dir\\Debug\\\\" /Fd"cmTC_3fc7d.dir\\Debug\\vc143.pdb" /external:W1 /TC /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.2\\Modules\\CMakeCCompilerABI.c"
+          C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_8ad94.dir\\Debug\\\\" /Fd"cmTC_8ad94.dir\\Debug\\vc143.pdb" /external:W1 /TC /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.2\\Modules\\CMakeCCompilerABI.c"
           x64 i├ºin Microsoft (R) C/C++ ─░yile┼ƒtirmeli Derleyicisi S├╝r├╝m 19.44.35219
           Telif Hakk─▒ (C) Microsoft Corporation. T├╝m haklar─▒ sakl─▒d─▒r.
-          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_3fc7d.dir\\Debug\\\\" /Fd"cmTC_3fc7d.dir\\Debug\\vc143.pdb" /external:W1 /TC /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.2\\Modules\\CMakeCCompilerABI.c"
+          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /RTC1 /MDd /Fo"cmTC_8ad94.dir\\Debug\\\\" /Fd"cmTC_8ad94.dir\\Debug\\vc143.pdb" /external:W1 /TC /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.2\\Modules\\CMakeCCompilerABI.c"
           CMakeCCompilerABI.c
         Link:
-          C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\link.exe /OUT:"C:\\Users\\31\\Desktop\\ToneForge\\reaper-extension\\build\\CMakeFiles\\CMakeScratch\\TryCompile-q0n99h\\Debug\\cmTC_3fc7d.exe" /INCREMENTAL /ILK:"cmTC_3fc7d.dir\\Debug\\cmTC_3fc7d.ilk" /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"C:/Users/31/Desktop/ToneForge/reaper-extension/build/CMakeFiles/CMakeScratch/TryCompile-q0n99h/Debug/cmTC_3fc7d.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"C:/Users/31/Desktop/ToneForge/reaper-extension/build/CMakeFiles/CMakeScratch/TryCompile-q0n99h/Debug/cmTC_3fc7d.lib" /MACHINE:X64  /machine:x64 cmTC_3fc7d.dir\\Debug\\CMakeCCompilerABI.obj
-          cmTC_3fc7d.vcxproj -> C:\\Users\\31\\Desktop\\ToneForge\\reaper-extension\\build\\CMakeFiles\\CMakeScratch\\TryCompile-q0n99h\\Debug\\cmTC_3fc7d.exe
+          C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\link.exe /OUT:"C:\\Users\\31\\Documents\\ToneForgev2\\reaper-extension\\build\\CMakeFiles\\CMakeScratch\\TryCompile-wgx9jr\\Debug\\cmTC_8ad94.exe" /INCREMENTAL /ILK:"cmTC_8ad94.dir\\Debug\\cmTC_8ad94.ilk" /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"C:/Users/31/Documents/ToneForgev2/reaper-extension/build/CMakeFiles/CMakeScratch/TryCompile-wgx9jr/Debug/cmTC_8ad94.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"C:/Users/31/Documents/ToneForgev2/reaper-extension/build/CMakeFiles/CMakeScratch/TryCompile-wgx9jr/Debug/cmTC_8ad94.lib" /MACHINE:X64  /machine:x64 cmTC_8ad94.dir\\Debug\\CMakeCCompilerABI.obj
+          cmTC_8ad94.vcxproj -> C:\\Users\\31\\Documents\\ToneForgev2\\reaper-extension\\build\\CMakeFiles\\CMakeScratch\\TryCompile-wgx9jr\\Debug\\cmTC_8ad94.exe
         FinalizeBuildStatus:
-          "cmTC_3fc7d.dir\\Debug\\cmTC_3fc7d.tlog\\unsuccessfulbuild" dosyas─▒ siliniyor.
-          "cmTC_3fc7d.dir\\Debug\\cmTC_3fc7d.tlog\\cmTC_3fc7d.lastbuildstate" ├╢─ƒesine eri┼ƒiliyor.
-        "C:\\Users\\31\\Desktop\\ToneForge\\reaper-extension\\build\\CMakeFiles\\CMakeScratch\\TryCompile-q0n99h\\cmTC_3fc7d.vcxproj" Projesini Olu┼ƒturma ─░┼ƒlemi Tamamland─▒ (varsay─▒lan hedefler).
+          "cmTC_8ad94.dir\\Debug\\cmTC_8ad94.tlog\\unsuccessfulbuild" dosyas─▒ siliniyor.
+          "cmTC_8ad94.dir\\Debug\\cmTC_8ad94.tlog\\cmTC_8ad94.lastbuildstate" ├╢─ƒesine eri┼ƒiliyor.
+        "C:\\Users\\31\\Documents\\ToneForgev2\\reaper-extension\\build\\CMakeFiles\\CMakeScratch\\TryCompile-wgx9jr\\cmTC_8ad94.vcxproj" Projesini Olu┼ƒturma ─░┼ƒlemi Tamamland─▒ (varsay─▒lan hedefler).
         
         Olu┼ƒturma ba┼ƒar─▒l─▒ oldu.
             0 Uyar─▒
             0 Hata
         
-        Ge├ºen S├╝re 00:00:00.57
+        Ge├ºen S├╝re 00:00:01.71
         
       exitCode: 0
   -
@@ -1045,8 +1088,8 @@ events:
     checks:
       - "Detecting CXX compiler ABI info"
     directories:
-      source: "C:/Users/31/Desktop/ToneForge/reaper-extension/build/CMakeFiles/CMakeScratch/TryCompile-p2v51t"
-      binary: "C:/Users/31/Desktop/ToneForge/reaper-extension/build/CMakeFiles/CMakeScratch/TryCompile-p2v51t"
+      source: "C:/Users/31/Documents/ToneForgev2/reaper-extension/build/CMakeFiles/CMakeScratch/TryCompile-dzvavg"
+      binary: "C:/Users/31/Documents/ToneForgev2/reaper-extension/build/CMakeFiles/CMakeScratch/TryCompile-dzvavg"
     cmakeVariables:
       CMAKE_CXX_FLAGS: "/DWIN32 /D_WINDOWS /GR /EHsc"
       CMAKE_CXX_FLAGS_DEBUG: "/Zi /Ob0 /Od /RTC1"
@@ -1056,39 +1099,39 @@ events:
       variable: "CMAKE_CXX_ABI_COMPILED"
       cached: true
       stdout: |
-        Change Dir: 'C:/Users/31/Desktop/ToneForge/reaper-extension/build/CMakeFiles/CMakeScratch/TryCompile-p2v51t'
+        Change Dir: 'C:/Users/31/Documents/ToneForgev2/reaper-extension/build/CMakeFiles/CMakeScratch/TryCompile-dzvavg'
         
-        Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_9531e.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=17.0 /v:n
+        Run Build Command(s): "C:/Program Files/Microsoft Visual Studio/2022/Community/MSBuild/Current/Bin/amd64/MSBuild.exe" cmTC_18717.vcxproj /p:Configuration=Debug /p:Platform=x64 /p:VisualStudioVersion=17.0 /v:n
         .NET Framework i├ºin MSBuild s├╝r├╝m 17.14.23+b0019275e
-        Olu┼ƒturma ba┼ƒlat─▒ld─▒: 12/1/2025 8:46:56 AM.
+        Olu┼ƒturma ba┼ƒlat─▒ld─▒: 12/2/2025 9:23:46 PM.
         
-        1 d├╝─ƒ├╝m├╝nde "C:\\Users\\31\\Desktop\\ToneForge\\reaper-extension\\build\\CMakeFiles\\CMakeScratch\\TryCompile-p2v51t\\cmTC_9531e.vcxproj" projesi (varsay─▒lan hedefler).
+        1 d├╝─ƒ├╝m├╝nde "C:\\Users\\31\\Documents\\ToneForgev2\\reaper-extension\\build\\CMakeFiles\\CMakeScratch\\TryCompile-dzvavg\\cmTC_18717.vcxproj" projesi (varsay─▒lan hedefler).
         PrepareForBuild:
           Yap─▒land─▒r─▒lm─▒┼ƒ ├º─▒k─▒┼ƒ etkinle┼ƒtirildi. Derleyici tan─▒lamas─▒n─▒n bi├ºimlendirmesi hata hiyerar┼ƒisini yans─▒t─▒r. Daha fazla ayr─▒nt─▒ i├ºin bkz. https://aka.ms/cpp/structured-output.
-          "C:\\Users\\31\\Desktop\\ToneForge\\reaper-extension\\build\\CMakeFiles\\CMakeScratch\\TryCompile-p2v51t\\Debug\\" dizini olu┼ƒturuluyor.
-          "cmTC_9531e.dir\\Debug\\cmTC_9531e.tlog\\" dizini olu┼ƒturuluyor.
+          "C:\\Users\\31\\Documents\\ToneForgev2\\reaper-extension\\build\\CMakeFiles\\CMakeScratch\\TryCompile-dzvavg\\Debug\\" dizini olu┼ƒturuluyor.
+          "cmTC_18717.dir\\Debug\\cmTC_18717.tlog\\" dizini olu┼ƒturuluyor.
         InitializeBuildStatus:
-          "AlwaysCreate" belirtildi─ƒi i├ºin "cmTC_9531e.dir\\Debug\\cmTC_9531e.tlog\\unsuccessfulbuild" olu┼ƒturuluyor.
-          "cmTC_9531e.dir\\Debug\\cmTC_9531e.tlog\\unsuccessfulbuild" ├╢─ƒesine eri┼ƒiliyor.
+          "AlwaysCreate" belirtildi─ƒi i├ºin "cmTC_18717.dir\\Debug\\cmTC_18717.tlog\\unsuccessfulbuild" olu┼ƒturuluyor.
+          "cmTC_18717.dir\\Debug\\cmTC_18717.tlog\\unsuccessfulbuild" ├╢─ƒesine eri┼ƒiliyor.
         ClCompile:
-          C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GR /Fo"cmTC_9531e.dir\\Debug\\\\" /Fd"cmTC_9531e.dir\\Debug\\vc143.pdb" /external:W1 /TP /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.2\\Modules\\CMakeCXXCompilerABI.cpp"
+          C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\CL.exe /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GR /Fo"cmTC_18717.dir\\Debug\\\\" /Fd"cmTC_18717.dir\\Debug\\vc143.pdb" /external:W1 /TP /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.2\\Modules\\CMakeCXXCompilerABI.cpp"
           x64 i├ºin Microsoft (R) C/C++ ─░yile┼ƒtirmeli Derleyicisi S├╝r├╝m 19.44.35219
           Telif Hakk─▒ (C) Microsoft Corporation. T├╝m haklar─▒ sakl─▒d─▒r.
-          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GR /Fo"cmTC_9531e.dir\\Debug\\\\" /Fd"cmTC_9531e.dir\\Debug\\vc143.pdb" /external:W1 /TP /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.2\\Modules\\CMakeCXXCompilerABI.cpp"
+          cl /c /Zi /W1 /WX- /diagnostics:column /Od /Ob0 /D _MBCS /D WIN32 /D _WINDOWS /D _MBCS /D "CMAKE_INTDIR=\\"Debug\\"" /EHsc /RTC1 /MDd /GR /Fo"cmTC_18717.dir\\Debug\\\\" /Fd"cmTC_18717.dir\\Debug\\vc143.pdb" /external:W1 /TP /errorReport:queue "C:\\Program Files\\CMake\\share\\cmake-4.2\\Modules\\CMakeCXXCompilerABI.cpp"
           CMakeCXXCompilerABI.cpp
         Link:
-          C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\link.exe /OUT:"C:\\Users\\31\\Desktop\\ToneForge\\reaper-extension\\build\\CMakeFiles\\CMakeScratch\\TryCompile-p2v51t\\Debug\\cmTC_9531e.exe" /INCREMENTAL /ILK:"cmTC_9531e.dir\\Debug\\cmTC_9531e.ilk" /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"C:/Users/31/Desktop/ToneForge/reaper-extension/build/CMakeFiles/CMakeScratch/TryCompile-p2v51t/Debug/cmTC_9531e.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"C:/Users/31/Desktop/ToneForge/reaper-extension/build/CMakeFiles/CMakeScratch/TryCompile-p2v51t/Debug/cmTC_9531e.lib" /MACHINE:X64  /machine:x64 cmTC_9531e.dir\\Debug\\CMakeCXXCompilerABI.obj
-          cmTC_9531e.vcxproj -> C:\\Users\\31\\Desktop\\ToneForge\\reaper-extension\\build\\CMakeFiles\\CMakeScratch\\TryCompile-p2v51t\\Debug\\cmTC_9531e.exe
+          C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\bin\\HostX64\\x64\\link.exe /OUT:"C:\\Users\\31\\Documents\\ToneForgev2\\reaper-extension\\build\\CMakeFiles\\CMakeScratch\\TryCompile-dzvavg\\Debug\\cmTC_18717.exe" /INCREMENTAL /ILK:"cmTC_18717.dir\\Debug\\cmTC_18717.ilk" /NOLOGO kernel32.lib user32.lib gdi32.lib winspool.lib shell32.lib ole32.lib oleaut32.lib uuid.lib comdlg32.lib advapi32.lib /MANIFEST /MANIFESTUAC:"level='asInvoker' uiAccess='false'" /manifest:embed /DEBUG /PDB:"C:/Users/31/Documents/ToneForgev2/reaper-extension/build/CMakeFiles/CMakeScratch/TryCompile-dzvavg/Debug/cmTC_18717.pdb" /SUBSYSTEM:CONSOLE /TLBID:1 /IMPLIB:"C:/Users/31/Documents/ToneForgev2/reaper-extension/build/CMakeFiles/CMakeScratch/TryCompile-dzvavg/Debug/cmTC_18717.lib" /MACHINE:X64  /machine:x64 cmTC_18717.dir\\Debug\\CMakeCXXCompilerABI.obj
+          cmTC_18717.vcxproj -> C:\\Users\\31\\Documents\\ToneForgev2\\reaper-extension\\build\\CMakeFiles\\CMakeScratch\\TryCompile-dzvavg\\Debug\\cmTC_18717.exe
         FinalizeBuildStatus:
-          "cmTC_9531e.dir\\Debug\\cmTC_9531e.tlog\\unsuccessfulbuild" dosyas─▒ siliniyor.
-          "cmTC_9531e.dir\\Debug\\cmTC_9531e.tlog\\cmTC_9531e.lastbuildstate" ├╢─ƒesine eri┼ƒiliyor.
-        "C:\\Users\\31\\Desktop\\ToneForge\\reaper-extension\\build\\CMakeFiles\\CMakeScratch\\TryCompile-p2v51t\\cmTC_9531e.vcxproj" Projesini Olu┼ƒturma ─░┼ƒlemi Tamamland─▒ (varsay─▒lan hedefler).
+          "cmTC_18717.dir\\Debug\\cmTC_18717.tlog\\unsuccessfulbuild" dosyas─▒ siliniyor.
+          "cmTC_18717.dir\\Debug\\cmTC_18717.tlog\\cmTC_18717.lastbuildstate" ├╢─ƒesine eri┼ƒiliyor.
+        "C:\\Users\\31\\Documents\\ToneForgev2\\reaper-extension\\build\\CMakeFiles\\CMakeScratch\\TryCompile-dzvavg\\cmTC_18717.vcxproj" Projesini Olu┼ƒturma ─░┼ƒlemi Tamamland─▒ (varsay─▒lan hedefler).
         
         Olu┼ƒturma ba┼ƒar─▒l─▒ oldu.
             0 Uyar─▒
             0 Hata
         
-        Ge├ºen S├╝re 00:00:00.61
+        Ge├ºen S├╝re 00:00:01.61
         
       exitCode: 0
   -

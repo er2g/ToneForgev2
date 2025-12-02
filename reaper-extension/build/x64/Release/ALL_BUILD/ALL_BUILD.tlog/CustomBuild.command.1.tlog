@@ -1,6 +1,6 @@
-^C:\USERS\31\DESKTOP\TONEFORGE\REAPER-EXTENSION\CMAKELISTS.TXT
+^C:\USERS\31\DOCUMENTS\TONEFORGEV2\REAPER-EXTENSION\CMAKELISTS.TXT
 setlocal
-"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/31/Desktop/ToneForge/reaper-extension -BC:/Users/31/Desktop/ToneForge/reaper-extension/build --check-stamp-file C:/Users/31/Desktop/ToneForge/reaper-extension/build/CMakeFiles/generate.stamp
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/31/Documents/ToneForgev2/reaper-extension -BC:/Users/31/Documents/ToneForgev2/reaper-extension/build --check-stamp-file C:/Users/31/Documents/ToneForgev2/reaper-extension/build/CMakeFiles/generate.stamp
 if %errorlevel% neq 0 goto :cmEnd
 :cmEnd
 endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone

@@ -28,6 +28,7 @@
 #define REAPERAPI_WANT_TrackFX_GetParamName
 #define REAPERAPI_WANT_TrackFX_SetParamNormalized
 #define REAPERAPI_WANT_TrackFX_GetParamNormalized
+#define REAPERAPI_WANT_TrackFX_GetFormattedParamValue
 #define REAPERAPI_WANT_TrackFX_AddByName
 #define REAPERAPI_WANT_TrackFX_Delete
 #define REAPERAPI_WANT_EnumInstalledFX
@@ -60,6 +61,19 @@ typedef ReaProject Reaproject;
 // CPPHTTPLIB_OPENSSL_SUPPORT - OpenSSL kullanmıyoruz (localhost HTTP)
 #include "httplib.h"
 
+#ifndef CPPHTTPLIB_ZLIB_SUPPORT
+namespace httplib {
+namespace detail {
+inline bool nocompressor::compress(const char* data, size_t data_length, bool /*last*/, Callback callback) {
+    if (!data_length) {
+        return true;
+    }
+    return callback(data, data_length);
+}
+} // namespace detail
+} // namespace httplib
+#endif
+
 // JSON parser (single-header)
 #include <nlohmann/json.hpp>
 using json = nlohmann::json;
@@ -70,6 +84,57 @@ static httplib::Server g_server;
 static std::thread g_server_thread;
 static std::mutex g_api_mutex;
 static std::map<std::string, json> g_plugin_cache;
+
+struct ParamMetadata {
+    std::string display;
+    std::string unit;
+    std::string format_hint;
+};
+
+ParamMetadata GetParamMetadata(MediaTrack* track, int fx_idx, int param_idx) {
+    ParamMetadata meta{"", "", "raw"};
+
+    if (!track || !p_TrackFX_GetFormattedParamValue) {
+        return meta;
+    }
+
+    char formatted[256] = {0};
+    if (p_TrackFX_GetFormattedParamValue(track, fx_idx, param_idx, formatted, sizeof(formatted))) {
+        meta.display = formatted;
+    }
+
+    std::string lower = meta.display;
+    std::transform(lower.begin(), lower.end(), lower.begin(), ::tolower);
+
+    auto contains = [&lower](const std::string& needle) {
+        return lower.find(needle) != std::string::npos;
+    };
+
+    if (contains("db")) {
+        meta.unit = "dB";
+        meta.format_hint = "decibel";
+    } else if (contains("khz") || contains("hz")) {
+        meta.unit = "Hz";
+        meta.format_hint = "frequency";
+    } else if (contains("%")) {
+        meta.unit = "%";
+        meta.format_hint = "percentage";
+    } else if (contains("ms")) {
+        meta.unit = "ms";
+        meta.format_hint = "time";
+    } else if (
+        contains(" sec") ||
+        contains("sec") ||
+        (lower.size() > 1 &&
+         lower.back() == 's' &&
+         std::isdigit(static_cast<unsigned char>(lower[lower.size() - 2])))
+    ) {
+        meta.unit = "s";
+        meta.format_hint = "time";
+    }
+
+    return meta;
+}
 
 // REAPER API function pointers - REAPERAPI_WANT ile otomatik tanımlanacak
 // p_GetTrack, p_TrackFX_GetCount, vb. REAPER SDK tarafından sağlanır
@@ -139,9 +204,12 @@ std::vector<std::string> EnumerateInstalledFX() {
         return fx_names;
     }
 
-    char name_buffer[512] = {0};
-    for (int i = 0; p_EnumInstalledFX(i, name_buffer, sizeof(name_buffer)); ++i) {
-        fx_names.emplace_back(name_buffer);
+    const char* name_ptr = nullptr;
+    const char* ident_ptr = nullptr;
+    for (int i = 0; p_EnumInstalledFX(i, &name_ptr, &ident_ptr); ++i) {
+        if (name_ptr) {
+            fx_names.emplace_back(name_ptr);
+        }
     }
 
     return fx_names;
@@ -513,10 +581,14 @@ void SetupHTTPEndpoints() {
                 char param_name[256] = {0};
                 if (p_TrackFX_GetParamName(track, fx_idx, i, param_name, 256)) {
                     double value = p_TrackFX_GetParamNormalized(track, fx_idx, i);
+                    ParamMetadata meta = GetParamMetadata(track, fx_idx, i);
                     params.push_back({
                         {"index", i},
                         {"name", std::string(param_name)},
-                        {"value", value}
+                        {"value", value},
+                        {"display", meta.display},
+                        {"unit", meta.unit},
+                        {"format_hint", meta.format_hint}
                     });
                 }
             }
@@ -759,6 +831,7 @@ extern "C" REAPER_PLUGIN_DLL_EXPORT int REAPER_PLUGIN_ENTRYPOINT(
     IMPAPI(TrackFX_GetParamName);
     IMPAPI(TrackFX_SetParamNormalized);
     IMPAPI(TrackFX_GetParamNormalized);
+    IMPAPI(TrackFX_GetFormattedParamValue);
     IMPAPI(TrackFX_AddByName);
     IMPAPI(TrackFX_Delete);
     IMPAPI(EnumInstalledFX);

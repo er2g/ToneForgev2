@@ -1,4 +1,4 @@
-C:/Users/31/Desktop/ToneForge/reaper-extension/build/CMakeFiles/reaper_toneforge.dir
-C:/Users/31/Desktop/ToneForge/reaper-extension/build/CMakeFiles/INSTALL.dir
-C:/Users/31/Desktop/ToneForge/reaper-extension/build/CMakeFiles/ALL_BUILD.dir
-C:/Users/31/Desktop/ToneForge/reaper-extension/build/CMakeFiles/ZERO_CHECK.dir
+C:/Users/31/Documents/ToneForgev2/reaper-extension/build/CMakeFiles/reaper_toneforge.dir
+C:/Users/31/Documents/ToneForgev2/reaper-extension/build/CMakeFiles/INSTALL.dir
+C:/Users/31/Documents/ToneForgev2/reaper-extension/build/CMakeFiles/ALL_BUILD.dir
+C:/Users/31/Documents/ToneForgev2/reaper-extension/build/CMakeFiles/ZERO_CHECK.dir

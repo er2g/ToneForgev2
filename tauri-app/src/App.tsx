@@ -57,6 +57,9 @@ function App() {
 
   const currentTrack =
     tracks.find((track) => track.index === selectedTrack) ?? tracks[0];
+  const currentTrackFx = currentTrack?.fx_list ?? [];
+  const activeFxCount = currentTrackFx.filter((fx) => fx.enabled).length;
+  const readyForChat = apiKeySet && reaperConnected;
 
   useEffect(() => {
     const cached = localStorage.getItem(HISTORY_STORAGE_KEY);
@@ -163,9 +166,13 @@ function App() {
   }
 
   async function handleSendMessage() {
-    if (!input.trim() || !apiKeySet) return;
+    if (!input.trim() || !readyForChat) return;
 
-    const userMessage: Message = { role: "user", content: input, timestamp: Date.now() };
+    const userMessage: Message = {
+      role: "user",
+      content: input,
+      timestamp: Date.now(),
+    };
     setMessages((prev) => [...prev, userMessage]);
     const payload = input;
     setInput("");
@@ -228,299 +235,275 @@ function App() {
     }
   }
 
-  const currentTrackFx = currentTrack?.fx_list ?? [];
-  const activeFxCount = currentTrackFx.filter((fx) => fx.enabled).length;
-
-  const renderToneAssistant = () => {
-    if (!apiKeySet) {
-      return (
-        <div className="container">
-          <div className="setup-screen">
-            <h1>ToneForge</h1>
-            <p>AI-Powered Guitar Tone Assistant</p>
-
-            <div className="status">
-              <div
-                className={`status-indicator ${
-                  reaperConnected ? "connected" : "disconnected"
-                }`}
-              >
-                {reaperConnected ? "ON" : "OFF"}
-              </div>
-              <span>REAPER {reaperConnected ? "Connected" : "Disconnected"}</span>
-            </div>
-
-            {!reaperConnected && (
-              <div className="warning">
-                REAPER is not running or the ToneForge extension is not loaded.
-                <br />
-                Please start REAPER and ensure the extension is installed.
-              </div>
-            )}
-
-            <div className="api-config">
-              <label htmlFor="provider">API Provider</label>
-              <select
-                id="provider"
-                value={provider}
-                onChange={(e) => {
-                  const value = e.target.value as ProviderKey;
-                  setProvider(value);
-                  setModel(MODEL_PRESETS[value][0]);
-                }}
-              >
-                {PROVIDERS.map((item) => (
-                  <option key={item.key} value={item.key}>
-                    {item.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="api-config">
-              <label htmlFor="model">Model</label>
-              <input
-                id="model"
-                list="model-options"
-                placeholder="gemini-2.0-flash"
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-              />
-              <datalist id="model-options">
-                {MODEL_PRESETS[provider].map((entry) => (
-                  <option key={entry} value={entry} />
-                ))}
-              </datalist>
-            </div>
-
-            <div className="api-key-form">
-              <input
-                type="password"
-                placeholder="Enter API Key"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleConfigureAssistant()}
-              />
-              <button onClick={handleConfigureAssistant}>Start</button>
-            </div>
-
-            <div className="help-text">
-              <small>
-                Don't have an API key?{" "}
-                <a
-                  href="https://aistudio.google.com/app/apikey"
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Get one here
-                </a>
-              </small>
-            </div>
-          </div>
-        </div>
-      );
-    }
-
-    return (
-      <div className="container">
-        <header>
-          <h1>ToneForge</h1>
-          <div className="header-controls">
+  return (
+    <div className="app-container">
+      <header className="app-header">
+        <div className="header-content">
+          <h1>🎸 ToneForge</h1>
+          <div className="header-actions">
             <div
-              className={`status-dot ${
-                reaperConnected ? "connected" : "disconnected"
-              }`}
-            />
-            <button onClick={handleSavePreset} className="save-btn">
+              className={`status-pill ${reaperConnected ? "online" : "offline"}`}
+            >
+              {reaperConnected ? "REAPER Online" : "REAPER Offline"}
+            </div>
+            <div className="view-switcher">
+              <button
+                type="button"
+                className={activeView === "assistant" ? "active" : ""}
+                onClick={() => setActiveView("assistant")}
+              >
+                Assistant
+              </button>
+              <button
+                type="button"
+                className={activeView === "eq" ? "active" : ""}
+                onClick={() => setActiveView("eq")}
+              >
+                EQ Match
+              </button>
+            </div>
+            <button
+              className="primary-btn"
+              onClick={handleSavePreset}
+              disabled={!reaperConnected}
+            >
               Save Preset
             </button>
           </div>
-        </header>
+        </div>
+      </header>
 
-        <div className="main-layout">
-          <aside className="fx-panel">
-            <div className="channels-header">
-              <h3>Channels</h3>
-              <button className="ghost-btn" onClick={loadTrackOverview}>
-                Refresh
-              </button>
-            </div>
-
-            {tracks.length === 0 ? (
-              <p className="empty-state">No channels detected</p>
-            ) : (
-              <>
-                <div className="channel-grid">
-                  {tracks.map((track) => (
-                    <div
-                      key={track.index}
-                      className={`channel-card ${
-                        selectedTrack === track.index ? "selected" : ""
-                      }`}
-                      onClick={() => setSelectedTrack(track.index)}
-                    >
-                      <div className="channel-title">
-                        <span>Channel {track.index + 1}</span>
-                        <span
-                          className={`channel-dot ${
-                            track.fx_list.some((fx) => fx.enabled)
-                              ? "active"
-                              : "inactive"
-                          }`}
-                        />
-                      </div>
-                      <div className="channel-name">{track.name}</div>
-                      <div className="channel-meta">
-                        {
-                          track.fx_list.filter((fx) => fx.enabled).length
-                        }{" "}
-                        active / {track.fx_count} FX
-                      </div>
+      <main className="app-main">
+        {activeView === "assistant" ? (
+          <>
+            <aside className="sidebar">
+              {apiKeySet ? (
+                <>
+                  <div className="sidebar-section">
+                    <div className="section-header">
+                      <h3>Channels</h3>
+                      <button className="ghost-btn" onClick={loadTrackOverview}>
+                        Refresh
+                      </button>
                     </div>
-                  ))}
-                </div>
-
-                <div className="fx-section">
-                  <h4>
-                    {currentTrack
-                      ? `${currentTrack.name} · Channel ${currentTrack.index + 1}`
-                      : "FX Chain"}
-                  </h4>
-                  {currentTrackFx.length === 0 ? (
-                    <p className="empty-state">No plugins loaded</p>
-                  ) : (
-                    <ul className="fx-list">
-                      {currentTrackFx.map((fx) => (
-                        <li
-                          key={fx.index}
-                          className={`fx-item ${fx.enabled ? "enabled" : "disabled"}`}
-                        >
-                          <div className="fx-details">
-                            <span className="fx-name">
-                              {fx.index + 1}. {fx.name}
-                            </span>
-                            <span
-                              className={`fx-status ${fx.enabled ? "on" : "off"}`}
-                            >
-                              {fx.enabled ? "Active" : "Bypassed"}
-                            </span>
-                          </div>
-                          <button
-                            className="ghost-btn"
-                            onClick={() =>
-                              handleToggleFx(
-                                currentTrack.index,
-                                fx.index,
-                                fx.enabled
-                              )
-                            }
+                    {tracks.length === 0 ? (
+                      <p className="empty-state">No channels detected</p>
+                    ) : (
+                      <div className="channel-grid">
+                        {tracks.map((track) => (
+                          <div
+                            key={track.index}
+                            className={`channel-card ${
+                              selectedTrack === track.index ? "selected" : ""
+                            }`}
+                            onClick={() => setSelectedTrack(track.index)}
                           >
-                            {fx.enabled ? "Disable" : "Enable"}
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  <div className="fx-summary">
-                    {activeFxCount} active FX on this channel
+                            <div className="channel-title">
+                              <span>Channel {track.index + 1}</span>
+                              <span
+                                className={`channel-dot ${
+                                  track.fx_list.some((fx) => fx.enabled)
+                                    ? "active"
+                                    : "inactive"
+                                }`}
+                              />
+                            </div>
+                            <div className="channel-name">{track.name}</div>
+                            <div className="channel-meta">
+                              {track.fx_list.filter((fx) => fx.enabled).length} active / {" "}
+                              {track.fx_count} FX
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                </div>
-              </>
-            )}
-          </aside>
 
-          <main className="chat-panel">
-            <div className="chat-messages">
-              {messages.map((msg, idx) => (
-                <div key={idx} className={`message ${msg.role}`}>
-                  <div className="message-content">
-                    <p>{msg.content}</p>
-                    {msg.changes_table && msg.changes_table.length > 0 && (
-                      <ChangesTable changes={msg.changes_table} />
+                  <div className="sidebar-section">
+                    <div className="section-header">
+                      <h3>FX Chain</h3>
+                      {currentTrack && (
+                        <span className="section-meta">
+                          {currentTrack.name} · Channel {currentTrack.index + 1}
+                        </span>
+                      )}
+                    </div>
+                    {currentTrack && currentTrackFx.length > 0 ? (
+                      <ul className="fx-list">
+                        {currentTrackFx.map((fx) => (
+                          <li
+                            key={fx.index}
+                            className={`fx-item ${fx.enabled ? "enabled" : "disabled"}`}
+                          >
+                            <div className="fx-details">
+                              <span className="fx-name">
+                                {fx.index + 1}. {fx.name}
+                              </span>
+                              <span
+                                className={`fx-status ${fx.enabled ? "on" : "off"}`}
+                              >
+                                {fx.enabled ? "Active" : "Bypassed"}
+                              </span>
+                            </div>
+                            <button
+                              className="ghost-btn"
+                              onClick={() =>
+                                currentTrack &&
+                                handleToggleFx(currentTrack.index, fx.index, fx.enabled)
+                              }
+                            >
+                              {fx.enabled ? "Disable" : "Enable"}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="empty-state">No plugins loaded</p>
                     )}
-                    {msg.timestamp && (
-                      <small>
-                        {new Date(msg.timestamp).toLocaleTimeString([], {
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
-                      </small>
-                    )}
+                    <div className="fx-summary">
+                      {activeFxCount} active FX on this channel
+                    </div>
                   </div>
-                </div>
-              ))}
-              {loading && (
-                <div className="message assistant">
-                  <div className="message-content typing">Thinking...</div>
+                </>
+              ) : (
+                <div className="setup-panel">
+                  <h2>Connect ToneForge</h2>
+                  <p>Enter your API key to unlock the assistant.</p>
+
+                  <div className="status">
+                    <div
+                      className={`status-indicator ${
+                        reaperConnected ? "connected" : "disconnected"
+                      }`}
+                    >
+                      {reaperConnected ? "ON" : "OFF"}
+                    </div>
+                    <span>
+                      REAPER {reaperConnected ? "Connected" : "Disconnected"}
+                    </span>
+                  </div>
+
+                  <div className="api-config">
+                    <label htmlFor="provider">API Provider</label>
+                    <select
+                      id="provider"
+                      value={provider}
+                      onChange={(e) => {
+                        const value = e.target.value as ProviderKey;
+                        setProvider(value);
+                        setModel(MODEL_PRESETS[value][0]);
+                      }}
+                    >
+                      {PROVIDERS.map((item) => (
+                        <option key={item.key} value={item.key}>
+                          {item.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="api-config">
+                    <label htmlFor="model">Model</label>
+                    <input
+                      id="model"
+                      list="model-options"
+                      placeholder="gemini-2.0-flash"
+                      value={model}
+                      onChange={(e) => setModel(e.target.value)}
+                    />
+                    <datalist id="model-options">
+                      {MODEL_PRESETS[provider].map((entry) => (
+                        <option key={entry} value={entry} />
+                      ))}
+                    </datalist>
+                  </div>
+
+                  <div className="api-key-form">
+                    <input
+                      type="password"
+                      placeholder="Enter API Key"
+                      value={apiKey}
+                      onChange={(e) => setApiKey(e.target.value)}
+                      onKeyDown={(e) =>
+                        e.key === "Enter" && handleConfigureAssistant()
+                      }
+                    />
+                    <button onClick={handleConfigureAssistant}>Start</button>
+                  </div>
+
+                  <div className="help-text">
+                    <small>
+                      Don't have an API key?{" "}
+                      <a
+                        href="https://aistudio.google.com/app/apikey"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Get one here
+                      </a>
+                    </small>
+                  </div>
                 </div>
               )}
-            </div>
+            </aside>
 
-            <div className="chat-input">
-              <input
-                type="text"
-                placeholder={`Channel ${selectedTrack + 1}: Try "Boost the gain"`}
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
-                disabled={loading || !reaperConnected}
-              />
-              <button
-                onClick={handleSendMessage}
-                disabled={loading || !reaperConnected}
-              >
-                Send
-              </button>
-            </div>
+            <div className="chat-panel">
+              <div className="chat-messages">
+                {apiKeySet ? (
+                  <>
+                    {messages.map((msg, idx) => (
+                      <div key={idx} className={`message ${msg.role}`}>
+                        <div className="message-content">
+                          <p>{msg.content}</p>
+                          {msg.changes_table && msg.changes_table.length > 0 && (
+                            <ChangesTable changes={msg.changes_table} />
+                          )}
+                          {msg.timestamp && (
+                            <small>
+                              {new Date(msg.timestamp).toLocaleTimeString([], {
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              })}
+                            </small>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                    {loading && (
+                      <div className="message assistant">
+                        <div className="message-content typing">Thinking...</div>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div className="chat-placeholder">
+                    <p>Enter your API key in the sidebar to start chatting.</p>
+                  </div>
+                )}
+              </div>
 
-            <div className="examples">
-              <small>Try:</small>
-              <button
-                className="example-btn"
-                onClick={() => setInput("Channel 1 Metallica tone")}
-              >
-                Metallica tone
-              </button>
-              <button
-                className="example-btn"
-                onClick={() => setInput("Boost the gain to 80%")}
-              >
-                More gain
-              </button>
-              <button
-                className="example-btn"
-                onClick={() => setInput("Make channel 2 bass heavier")}
-              >
-                Warmer bass
-              </button>
+              <div className="chat-input">
+                <input
+                  type="text"
+                  placeholder={`Channel ${selectedTrack + 1}: Try "Metallica tone"`}
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
+                  disabled={!readyForChat || loading}
+                />
+                <button
+                  onClick={handleSendMessage}
+                  disabled={!readyForChat || loading || !input.trim()}
+                >
+                  {loading ? "..." : "Send"}
+                </button>
+              </div>
             </div>
-          </main>
-        </div>
-      </div>
-    );
-  };
-
-  return (
-    <div className="multi-view-root">
-      <div className="view-tabs">
-        <button
-          type="button"
-          className={`view-tab ${activeView === "assistant" ? "active" : ""}`}
-          onClick={() => setActiveView("assistant")}
-        >
-          Tone Assistant
-        </button>
-        <button
-          type="button"
-          className={`view-tab ${activeView === "eq" ? "active" : ""}`}
-          onClick={() => setActiveView("eq")}
-        >
-          EQ Matcher
-        </button>
-      </div>
-      <div className="view-body">
-        {activeView === "assistant" ? renderToneAssistant() : <EqMatchView />}
-      </div>
+          </>
+        ) : (
+          <EqMatchView />
+        )}
+      </main>
     </div>
   );
 }

@@ -43,6 +43,9 @@ pub struct FXParamEntry {
     pub index: i32,
     pub name: String,
     pub value: f64,
+    pub display: String,
+    pub unit: String,
+    pub format_hint: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

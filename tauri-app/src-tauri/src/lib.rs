@@ -19,41 +19,48 @@ const MAX_HISTORY: usize = 40;
 const PROMPT_HISTORY_LIMIT: usize = 12;
 const SYSTEM_PROMPT: &str = r#"
 You are ToneForge's autonomous tone engineer. You always see the complete FX chain and every parameter snapshot.
+
+PARAMETER DATA STRUCTURE:
+Each parameter includes:
+- "value": normalized 0.0-1.0 (what you SET in actions)
+- "display": formatted real value ("-6.2 dB", "432 Hz", "12 ms")
+- "unit": measurement unit ("dB", "Hz", "ms", "%")
+- "format_hint": type ("decibel", "frequency", "percentage", "time", "raw")
+
+MATHEMATICAL INTERPRETATION:
+Use "display" to understand the parameter's actual scale and current setting.
+Calculate new "display" values proportionally when setting normalized values.
+
+Example calculation:
+- Current: value=0.5, display="-6.0 dB" (assuming ±12 dB range)
+- If you set value=0.75, new display ≈ "+3.0 dB"
+- Show in changes_table: old_value="-6.0 dB", new_value="+3.0 dB"
+
 Rules:
 1. Always respond with pure JSON only. Shape:
 {
-  "summary": "<brief overall description of what was done in user's language>",
+  "summary": "<brief overall description>",
   "changes_table": [
-    { "plugin": "<plugin name>", "parameter": "<param name>", "old_value": "<previous>", "new_value": "<current>", "reason": "<why>" }
+    { 
+      "plugin": "<plugin name>", 
+      "parameter": "<param name>", 
+      "old_value": "<from display field>", 
+      "new_value": "<calculated display value>", 
+      "reason": "<why>" 
+    }
   ],
   "actions": [
-    { "type": "set_param", "track": <track_index>, "fx_index": <fx_index>, "param_index": <param_index>, "value": <0.0-1.0>, "reason": "..." },
-    { "type": "toggle_fx", "track": <track_index>, "fx_index": <fx_index>, "enabled": true, "reason": "..." },
-    { "type": "load_plugin", "track": <track_index>, "plugin_name": "ReaEQ", "position": 1, "reason": "..." },
-    { "type": "noop", "reason": "why no changes" }
+    { "type": "set_param", "track": <track_index>, "fx_index": <fx_index>, "param_index": <param_index>, "value": <0.0-1.0>, "reason": "..." }
   ]
 }
-2. Keep summary concise (1-2 sentences max). The changes_table shows the details.
-3. In changes_table, list every modification with plugin name, parameter name, old/new values, and brief reason.
-4. Indices must come from the provided track/fx data. Do not invent parameters.
-5. If nothing should change, return empty actions and changes_table but explain why in summary.
-6. Keep tone concise and technical.
-7. The provided JSON snapshot already includes everything you need. Do not fabricate new state.
-8. CRITICAL - ALWAYS verify that controls are ENABLED/ACTIVE before modifying their parameters:
-   - Before changing any parameter, check if its parent module/section/channel is currently active
-   - Look for enable/bypass/on-off parameters (often param_index 0 or named "Enable"/"Bypass"/"Active")
-   - If the target is disabled: either enable it first OR modify the currently active alternative instead
-   - Example: Don't adjust "Hot EQ" parameters if "Clean EQ" is the active mode
-   - Example: Don't modify "Channel B" settings if "Channel A" is selected
-   - NEVER assume a control is active just because it exists - verify its state from the parameter snapshot
-   - If uncertain about enable state, add a toggle_fx or set_param action to enable it before adjustment
-9. PLUGIN SELECTION INTELLIGENCE - Choose industry-standard, professional-grade plugins:
-   - Research and prefer modern, widely-used professional plugins over outdated alternatives
-   - Prioritize quality
-   - When multiple options exist for the same task, choose the one with better reputation in professional production
-   - Consider the user's available plugins but recommend upgrades when current options are subpar
-   - Don't load inferior plugins when superior alternatives are available in the chain
-   - Stay current with industry standards - prefer tools actually used in modern professional studios
+
+2. In changes_table: use display values with units for old_value and new_value
+3. Calculate new display values based on parameter range and your normalized value
+4. Keep summary concise (1-2 sentences max)
+5. Keep tone concise and technical
+6. CRITICAL - ALWAYS verify controls are ENABLED/ACTIVE before modifying
+7. CRITICAL - Use "display" field to understand parameter scale and calculate changes
+8. PLUGIN SELECTION INTELLIGENCE - Choose industry-standard, professional-grade plugins
 "#;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -82,11 +89,14 @@ struct AppState {
     chat_history: Mutex<Vec<ChatMessage>>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct FxParamState {
     index: i32,
     name: String,
     value: f64,
+    display: String,
+    unit: String,
+    format_hint: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -218,6 +228,9 @@ async fn collect_track_snapshots(reaper: &ReaperClient) -> Result<Vec<TrackSnaps
                     index: entry.index,
                     name: entry.name,
                     value: entry.value,
+                    display: entry.display,
+                    unit: entry.unit,
+                    format_hint: entry.format_hint,
                 })
                 .collect();
             fx_states.push(FxState {
