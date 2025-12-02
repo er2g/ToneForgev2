@@ -184,7 +184,7 @@ struct AIPlan {
     actions: Vec<PlannedAction>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 enum PlannedAction {
     #[serde(rename = "set_param")]
@@ -705,38 +705,48 @@ async fn process_chat_message(
     let mut plan = parse_plan(&ai_text)?;
 
     // ========== AI ENGINE: PROFESSIONAL OPTIMIZATIONS ==========
-    println!("[AI ENGINE] Processing {} actions...", plan.actions.len());
+    println!("[AI ENGINE] Processing {} total actions...", plan.actions.len());
 
-    // 1. CONFLICT DETECTION
-    let converted_actions: Vec<ai_engine::ActionPlan> = plan.actions.iter()
-        .filter_map(|action| match action {
+    // Separate SetParam actions for optimization, keep others as-is
+    let mut set_param_actions: Vec<ai_engine::ActionPlan> = Vec::new();
+    let mut other_actions: Vec<PlannedAction> = Vec::new();
+
+    for action in plan.actions.iter() {
+        match action {
             PlannedAction::SetParam { track, fx_index, param_index, value, reason } => {
-                Some(ai_engine::ActionPlan {
+                set_param_actions.push(ai_engine::ActionPlan {
                     track: *track,
                     fx_index: *fx_index,
                     param_index: *param_index,
                     value: *value,
                     reason: reason.clone().unwrap_or_default(),
-                })
+                });
             }
-            _ => None,
-        })
-        .collect();
+            _ => {
+                // Keep ToggleFx, LoadPlugin, WebSearch, Noop as-is
+                other_actions.push(action.clone());
+            }
+        }
+    }
 
-    let conflicts = ai_engine::ActionOptimizer::detect_conflicts(&converted_actions);
+    println!("[AI ENGINE] Split: {} SetParam actions, {} other actions",
+        set_param_actions.len(), other_actions.len());
+
+    // 1. CONFLICT DETECTION (only for SetParam)
+    let conflicts = ai_engine::ActionOptimizer::detect_conflicts(&set_param_actions);
     for conflict in &conflicts {
         println!("[AI ENGINE] ⚠️  {}", conflict);
     }
 
-    // 2. ACTION DEDUPLICATION & OPTIMIZATION
-    let deduplicated = ai_engine::ActionOptimizer::deduplicate(converted_actions);
+    // 2. ACTION DEDUPLICATION & OPTIMIZATION (only for SetParam)
+    let deduplicated = ai_engine::ActionOptimizer::deduplicate(set_param_actions);
     println!(
-        "[AI ENGINE] Deduplicated: {} → {} actions",
-        plan.actions.len(),
+        "[AI ENGINE] Deduplicated SetParam: {} → {} actions",
+        plan.actions.iter().filter(|a| matches!(a, PlannedAction::SetParam { .. })).count(),
         deduplicated.len()
     );
 
-    // 3. SAFETY VALIDATION
+    // 3. SAFETY VALIDATION (only for SetParam)
     let mut safety_warnings = Vec::new();
     for action in &deduplicated {
         // Find parameter name from snapshot
@@ -781,8 +791,9 @@ async fn process_chat_message(
         println!("[AI ENGINE] 🛡️  Safety: {}", warning);
     }
 
-    // Convert back to PlannedAction for apply_actions
-    plan.actions = deduplicated.into_iter().map(|action| {
+    // Rebuild full action list: other_actions FIRST (toggles, loads), then optimized SetParam
+    plan.actions = other_actions;
+    plan.actions.extend(deduplicated.into_iter().map(|action| {
         PlannedAction::SetParam {
             track: action.track,
             fx_index: action.fx_index,
@@ -790,7 +801,9 @@ async fn process_chat_message(
             value: action.value,
             reason: Some(action.reason),
         }
-    }).collect();
+    }));
+
+    println!("[AI ENGINE] Final action count: {} (ready for execution)", plan.actions.len());
 
     let action_logs = apply_actions(&reaper, &tracks_snapshot, &plan.actions).await?;
     for log in action_logs {
