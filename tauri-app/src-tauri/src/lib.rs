@@ -18,7 +18,7 @@ use tauri::State;
 const MAX_HISTORY: usize = 40;
 const PROMPT_HISTORY_LIMIT: usize = 12;
 const SYSTEM_PROMPT: &str = r#"
-You are ToneForge's autonomous tone engineer. You always see the complete FX chain and every parameter snapshot.
+You are ToneForge's autonomous tone engineer with web research capabilities. You always see the complete FX chain and every parameter snapshot.
 
 PARAMETER DATA STRUCTURE:
 Each parameter includes:
@@ -36,21 +36,53 @@ Example calculation:
 - If you set value=0.75, new display ≈ "+3.0 dB"
 - Show in changes_table: old_value="-6.0 dB", new_value="+3.0 dB"
 
+HIERARCHICAL VALIDATION (CRITICAL):
+Before modifying ANY parameter, validate from top to bottom:
+1. Plugin level: Is the FX enabled? (check "enabled" field in fx)
+2. Section level: If parameter belongs to a section (e.g., "Overdrive On", "Delay Enable"), is that section active?
+3. Parameter level: Is the control itself accessible and not bypassed?
+
+Example validation chain:
+- User wants to change "Overdrive Gain"
+- Step 1: Check if plugin "Neural DSP Gojira" is enabled
+- Step 2: Check if "Overdrive On" parameter is enabled (value > 0.5 typically means ON)
+- Step 3: Only then modify "Overdrive Gain"
+
+If validation fails at any level:
+- Add a "toggle_fx" or "set_param" action to ENABLE the parent control FIRST
+- Then proceed with the actual change
+- Document this in changes_table and reason field
+
+RESEARCH CAPABILITY:
+You have access to web search. When user requests a specific tone or style you're unfamiliar with:
+1. Use "web_search" action to research: "Neural DSP Gojira settings for Metallica tone"
+2. Use "web_search" to find plugin recommendations: "best VST plugins for jazz guitar clean tone"
+3. Synthesize findings into parameter changes
+4. Document your research source in the reason field
+
+Action types:
+- "set_param": Change a parameter value
+- "toggle_fx": Enable/disable an FX
+- "load_plugin": Add a new plugin
+- "web_search": Research tone/plugin information (query: "your search query")
+- "noop": No changes needed
+
 Rules:
 1. Always respond with pure JSON only. Shape:
 {
   "summary": "<brief overall description>",
   "changes_table": [
-    { 
-      "plugin": "<plugin name>", 
-      "parameter": "<param name>", 
-      "old_value": "<from display field>", 
-      "new_value": "<calculated display value>", 
-      "reason": "<why>" 
+    {
+      "plugin": "<plugin name>",
+      "parameter": "<param name>",
+      "old_value": "<from display field>",
+      "new_value": "<calculated display value>",
+      "reason": "<why>"
     }
   ],
   "actions": [
-    { "type": "set_param", "track": <track_index>, "fx_index": <fx_index>, "param_index": <param_index>, "value": <0.0-1.0>, "reason": "..." }
+    { "type": "set_param", "track": <track_index>, "fx_index": <fx_index>, "param_index": <param_index>, "value": <0.0-1.0>, "reason": "..." },
+    { "type": "web_search", "query": "search query", "reason": "..." }
   ]
 }
 
@@ -58,9 +90,11 @@ Rules:
 3. Calculate new display values based on parameter range and your normalized value
 4. Keep summary concise (1-2 sentences max)
 5. Keep tone concise and technical
-6. CRITICAL - ALWAYS verify controls are ENABLED/ACTIVE before modifying
+6. CRITICAL - HIERARCHICAL VALIDATION: Always check plugin → section → parameter is enabled
 7. CRITICAL - Use "display" field to understand parameter scale and calculate changes
-8. PLUGIN SELECTION INTELLIGENCE - Choose industry-standard, professional-grade plugins
+8. CRITICAL - If a control is disabled, ENABLE IT FIRST before modifying its parameters
+9. PLUGIN SELECTION INTELLIGENCE - Choose industry-standard, professional-grade plugins
+10. USE WEB SEARCH - Don't guess tone settings, research them if needed
 "#;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -174,6 +208,11 @@ enum PlannedAction {
         track: i32,
         plugin_name: String,
         position: Option<i32>,
+        reason: Option<String>,
+    },
+    #[serde(rename = "web_search")]
+    WebSearch {
+        query: String,
         reason: Option<String>,
     },
     #[serde(rename = "noop")]
@@ -295,6 +334,28 @@ fn find_param<'a>(fx: &'a FxState, param_idx: i32) -> Option<&'a FxParamState> {
     fx.params.iter().find(|p| p.index == param_idx)
 }
 
+async fn perform_web_search(query: &str) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let search_url = format!(
+        "https://html.duckduckgo.com/html/?q={}",
+        urlencoding::encode(query)
+    );
+
+    let response = client
+        .get(&search_url)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .send()
+        .await
+        .map_err(|e| format!("Web search failed: {}", e))?;
+
+    let html = response.text().await.map_err(|e| e.to_string())?;
+
+    // Simple extraction: get first 500 chars of HTML as context
+    // In production, you'd parse this properly or use a search API
+    let preview = html.chars().take(1000).collect::<String>();
+    Ok(format!("Search results preview for '{}': {}", query, preview))
+}
+
 async fn apply_actions(
     reaper: &ReaperClient,
     tracks: &[TrackSnapshot],
@@ -312,6 +373,19 @@ async fn apply_actions(
             } => {
                 if let Some(track_state) = find_track(tracks, *track) {
                     if let Some(fx_state) = find_fx(track_state, *fx_index) {
+                        // HIERARCHICAL VALIDATION: Check if FX is enabled
+                        if !fx_state.enabled {
+                            logs.push(format!(
+                                "⚠️  Plugin '{}' is DISABLED. Enabling it first...",
+                                fx_state.name
+                            ));
+                            reaper
+                                .set_fx_enabled(*track, *fx_index, true)
+                                .await
+                                .map_err(|e| e.to_string())?;
+                            logs.push(format!("✓ Enabled '{}'", fx_state.name));
+                        }
+
                         if let Some(param_state) = find_param(fx_state, *param_index) {
                             reaper
                                 .set_param(*track, *fx_index, &param_state.name, *value)
@@ -376,6 +450,21 @@ async fn apply_actions(
                     slot,
                     reason.clone().unwrap_or_else(|| "no reason".into())
                 ));
+            }
+            PlannedAction::WebSearch { query, reason } => {
+                logs.push(format!(
+                    "🔍 Researching: '{}' ({})",
+                    query,
+                    reason.clone().unwrap_or_else(|| "gathering info".into())
+                ));
+                match perform_web_search(query).await {
+                    Ok(result) => {
+                        logs.push(format!("✓ Search completed: {}", &result[..200.min(result.len())]));
+                    }
+                    Err(e) => {
+                        logs.push(format!("⚠️  Search failed: {}", e));
+                    }
+                }
             }
             PlannedAction::Noop { reason } => {
                 logs.push(format!(
