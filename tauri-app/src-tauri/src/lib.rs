@@ -1,3 +1,4 @@
+mod ai_engine;
 mod audio;
 mod dsp;
 mod gemini_client;
@@ -700,7 +701,95 @@ async fn process_chat_message(
 
     let prompt = build_prompt(&payload)?;
     let ai_text = ai_provider.generate(&prompt).await.map_err(|e| e.to_string())?;
-    let plan = parse_plan(&ai_text)?;
+    let mut plan = parse_plan(&ai_text)?;
+
+    // ========== AI ENGINE: PROFESSIONAL OPTIMIZATIONS ==========
+    println!("[AI ENGINE] Processing {} actions...", plan.actions.len());
+
+    // 1. CONFLICT DETECTION
+    let converted_actions: Vec<ai_engine::ActionPlan> = plan.actions.iter()
+        .filter_map(|action| match action {
+            PlannedAction::SetParam { track, fx_index, param_index, value, reason } => {
+                Some(ai_engine::ActionPlan {
+                    track: *track,
+                    fx_index: *fx_index,
+                    param_index: *param_index,
+                    value: *value,
+                    reason: reason.clone().unwrap_or_default(),
+                })
+            }
+            _ => None,
+        })
+        .collect();
+
+    let conflicts = ai_engine::ActionOptimizer::detect_conflicts(&converted_actions);
+    for conflict in &conflicts {
+        println!("[AI ENGINE] ⚠️  {}", conflict);
+    }
+
+    // 2. ACTION DEDUPLICATION & OPTIMIZATION
+    let deduplicated = ai_engine::ActionOptimizer::deduplicate(converted_actions);
+    println!(
+        "[AI ENGINE] Deduplicated: {} → {} actions",
+        plan.actions.len(),
+        deduplicated.len()
+    );
+
+    // 3. SAFETY VALIDATION
+    let mut safety_warnings = Vec::new();
+    for action in &deduplicated {
+        // Find parameter name from snapshot
+        if let Some(track_state) = find_track(&tracks_snapshot, action.track) {
+            if let Some(fx_state) = find_fx(track_state, action.fx_index) {
+                if let Some(param_state) = find_param(fx_state, action.param_index) {
+                    let (clamped_value, warning) =
+                        ai_engine::SafetyValidator::validate_value(&param_state.name, action.value);
+
+                    if let Some(warn) = warning {
+                        safety_warnings.push(format!(
+                            "{} :: {} -> {}: {}",
+                            fx_state.name, param_state.name, clamped_value, warn
+                        ));
+                    }
+
+                    // 4. SEMANTIC ANALYSIS & RELATIONSHIP SUGGESTIONS
+                    let category = ai_engine::SemanticAnalyzer::categorize(&param_state.name);
+                    println!(
+                        "[AI ENGINE] Parameter '{}' categorized as {:?}",
+                        param_state.name, category
+                    );
+
+                    let suggestions = ai_engine::RelationshipEngine::suggest_compensations(
+                        &param_state.name,
+                        param_state.value,
+                        action.value,
+                    );
+
+                    for (param, delta, reason) in suggestions {
+                        println!(
+                            "[AI ENGINE] 💡 Suggestion: Adjust '{}' by {:.2} ({})",
+                            param, delta, reason
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    for warning in &safety_warnings {
+        println!("[AI ENGINE] 🛡️  Safety: {}", warning);
+    }
+
+    // Convert back to PlannedAction for apply_actions
+    plan.actions = deduplicated.into_iter().map(|action| {
+        PlannedAction::SetParam {
+            track: action.track,
+            fx_index: action.fx_index,
+            param_index: action.param_index,
+            value: action.value,
+            reason: Some(action.reason),
+        }
+    }).collect();
 
     let action_logs = apply_actions(&reaper, &tracks_snapshot, &plan.actions).await?;
     for log in action_logs {

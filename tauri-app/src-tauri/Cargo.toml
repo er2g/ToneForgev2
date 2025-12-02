@@ -33,3 +33,4 @@ biquad = "0.4"
 statrs = "0.16"
 rayon = "1.8"
 urlencoding = "2.1"
+uuid = { version = "1", features = ["v4"] }
