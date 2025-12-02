@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\31\Desktop\ToneForge\reaper-extension\build\CMakeFiles\aa5c4618362352048f3ba9b6dcd40f81\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{98974DF8-E010-380C-9DAF-36FB1D6593A7}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

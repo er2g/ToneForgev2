@@ -1,0 +1,10 @@
+^C:\USERS\31\DESKTOP\TONEFORGE\REAPER-EXTENSION\BUILD\CMAKEFILES\AA5C4618362352048F3BA9B6DCD40F81\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/31/Desktop/ToneForge/reaper-extension -BC:/Users/31/Desktop/ToneForge/reaper-extension/build --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file C:/Users/31/Desktop/ToneForge/reaper-extension/build/reaper_toneforge.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

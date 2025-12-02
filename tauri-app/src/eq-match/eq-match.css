@@ -1,0 +1,637 @@
+﻿.eqm-root {
+  --bg-primary: #050505;
+  --bg-secondary: #111111;
+  --bg-tertiary: #1d1d1d;
+  --text-primary: #ffffff;
+  --text-secondary: #a0a0a0;
+  --accent-blue: #60a5fa;
+  --accent-green: #4ade80;
+  --accent-red: #f87171;
+  --accent-yellow: #fbbf24;
+  --accent-blue-soft: rgba(96, 165, 250, 0.1);
+  --border-color: #2e2e2e;
+  min-height: 100%;
+  width: 100%;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.eqm-header {
+  padding: 1.5rem 2rem;
+  border-bottom: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  background: var(--bg-secondary);
+}
+
+.eqm-kicker {
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.25rem;
+}
+
+.eqm-header h1 {
+  font-size: 2rem;
+  margin: 0;
+}
+
+.eqm-step-indicator {
+  display: flex;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.eqm-step-badge {
+  padding: 0.4rem 1.25rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  font-size: 0.9rem;
+  opacity: 0.6;
+  transition: all 0.2s ease;
+}
+
+.eqm-step-badge.active {
+  opacity: 1;
+  border-color: var(--accent-blue);
+  background: var(--accent-blue-soft);
+}
+
+.eqm-step-badge.completed {
+  opacity: 1;
+  border-color: var(--accent-green);
+}
+
+.eqm-main {
+  padding: 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.eqm-error {
+  background: rgba(248, 113, 113, 0.1);
+  border: 1px solid var(--accent-red);
+  color: var(--accent-red);
+  padding: 1rem;
+  border-radius: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.eqm-error button {
+  background: transparent;
+  border: 1px solid var(--accent-red);
+  color: var(--accent-red);
+  padding: 0.3rem 0.75rem;
+  border-radius: 6px;
+}
+
+.eqm-upload-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2rem;
+  padding: 2rem 0;
+}
+
+.eqm-arrow-down {
+  font-size: 2.5rem;
+  color: var(--accent-blue);
+  animation: eqm-bounce 2s infinite;
+}
+
+@keyframes eqm-bounce {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(10px);
+  }
+}
+
+.eqm-analyze-section,
+.eqm-match-section {
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.eqm-profiles-comparison {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 1.5rem;
+}
+
+.eqm-match-quality {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 1.5rem;
+}
+
+.quality-bar {
+  width: 100%;
+  height: 8px;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 0.5rem 0;
+}
+
+.quality-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+
+.quality-score {
+  font-size: 1.25rem;
+  font-weight: 600;
+}
+
+.eqm-warnings {
+  background: rgba(251, 191, 36, 0.08);
+  border: 1px solid var(--accent-yellow);
+  padding: 1rem 1.25rem;
+  border-radius: 12px;
+}
+
+.eqm-warnings ul {
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+/* Buttons */
+.eqm-root .btn-primary,
+.eqm-root .btn-secondary,
+.eqm-root .btn-text,
+.eqm-root .btn-export {
+  padding: 0.75rem 1.5rem;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 1rem;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.eqm-root .btn-primary {
+  background: var(--accent-blue);
+  color: #fff;
+}
+
+.eqm-root .btn-primary:hover:not(:disabled) {
+  background: #3b82f6;
+}
+
+.eqm-root .btn-secondary {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+}
+
+.eqm-root .btn-secondary:hover:not(:disabled) {
+  border-color: var(--accent-blue);
+}
+
+.eqm-root .btn-text {
+  background: transparent;
+  color: var(--accent-blue);
+  padding: 0.4rem 0;
+}
+
+.eqm-root .btn-large {
+  padding: 1rem 2rem;
+}
+
+.eqm-root .btn-small {
+  padding: 0.4rem 1rem;
+  font-size: 0.85rem;
+}
+
+.eqm-root button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* File uploader */
+.eqm-root .file-uploader {
+  width: 100%;
+  max-width: 520px;
+  min-height: 240px;
+  border: 2px dashed var(--border-color);
+  border-radius: 16px;
+  padding: 2rem;
+  text-align: center;
+  background: var(--bg-secondary);
+}
+
+.eqm-root .file-uploader:hover {
+  border-color: var(--accent-blue);
+  background: rgba(96, 165, 250, 0.06);
+}
+
+.eqm-root .file-uploader.drag-over {
+  border-color: var(--accent-green);
+  background: rgba(74, 222, 128, 0.08);
+}
+
+.eqm-root .file-uploader.loaded {
+  border-style: solid;
+  border-color: var(--accent-green);
+}
+
+.eqm-root .uploader-content {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  align-items: center;
+}
+
+.eqm-root .upload-icon,
+.eqm-root .success-icon {
+  font-size: 3rem;
+}
+
+.eqm-root .success-text {
+  color: var(--accent-green);
+  font-weight: 600;
+}
+
+.eqm-root .file-formats {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+/* Control panel */
+.eqm-root .control-panel {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 2rem;
+}
+
+.eqm-root .control-panel h3 {
+  margin-bottom: 1.5rem;
+  color: var(--accent-blue);
+}
+
+.eqm-root .control-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.eqm-root .control-section.advanced {
+  border-top: 1px solid var(--border-color);
+  padding-top: 1.5rem;
+  margin-top: 1.5rem;
+}
+
+.eqm-root .control-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.eqm-root .label-text {
+  font-weight: 600;
+}
+
+.eqm-root .label-value {
+  color: var(--accent-blue);
+  font-weight: 700;
+}
+
+.eqm-root .slider {
+  width: 100%;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+}
+
+.eqm-root .slider::-webkit-slider-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--accent-blue);
+}
+
+.eqm-root .slider-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+
+.eqm-root .help-text {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  background: rgba(255, 255, 255, 0.05);
+  padding: 0.75rem;
+  border-left: 3px solid var(--accent-blue);
+  border-radius: 8px;
+}
+
+.eqm-root .toggle-group {
+  padding: 0.5rem 0;
+}
+
+.eqm-root .toggle-label {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+}
+
+.eqm-root .toggle-switch {
+  width: 48px;
+  height: 24px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.15);
+  position: relative;
+}
+
+.eqm-root .toggle-switch::before {
+  content: '';
+  position: absolute;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  top: 2px;
+  left: 2px;
+  transition: transform 0.2s ease;
+}
+
+.eqm-root input:checked + .toggle-switch {
+  background: var(--accent-green);
+}
+
+.eqm-root input:checked + .toggle-switch::before {
+  transform: translateX(24px);
+}
+
+.eqm-root .preset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+}
+
+.eqm-root .btn-preset {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid var(--border-color);
+  padding: 0.75rem;
+  border-radius: 8px;
+  color: var(--text-primary);
+}
+
+/* Frequency analyzer */
+.eqm-root .frequency-analyzer {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 1.5rem;
+}
+
+.eqm-root .chart-container {
+  height: 260px;
+  margin-bottom: 1rem;
+}
+
+.eqm-root .audio-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.eqm-root .stat-item {
+  background: var(--bg-tertiary);
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+}
+
+.eqm-root .confidence-indicator {
+  margin-top: 1rem;
+}
+
+.eqm-root .confidence-bars {
+  display: flex;
+  gap: 0.3rem;
+  height: 80px;
+  align-items: flex-end;
+}
+
+.eqm-root .confidence-bar {
+  width: 12px;
+  border-radius: 4px 4px 0 0;
+}
+
+/* EQ visualization */
+.eqm-root .eq-visualization {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.eqm-root .main-chart {
+  height: 360px;
+}
+
+.eqm-root .eq-bands-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+}
+
+.eqm-root .eq-band-card {
+  background: var(--bg-tertiary);
+  border-radius: 12px;
+  padding: 1rem;
+  border: 1px solid transparent;
+}
+
+.eqm-root .eq-band-card.boost {
+  border-color: rgba(74, 222, 128, 0.3);
+}
+
+.eqm-root .eq-band-card.cut {
+  border-color: rgba(248, 113, 113, 0.3);
+}
+
+.eqm-root .band-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
+.eqm-root .band-frequency {
+  font-size: 1.3rem;
+  font-weight: 600;
+  margin: 0.5rem 0;
+}
+
+.eqm-root .band-visual {
+  margin: 0.5rem 0;
+}
+
+.eqm-root .gain-bar-container {
+  position: relative;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 4px;
+}
+
+.eqm-root .gain-bar {
+  height: 8px;
+  border-radius: 4px;
+}
+
+.eqm-root .gain-bar.boost {
+  background: var(--accent-green);
+}
+
+.eqm-root .gain-bar.cut {
+  background: var(--accent-red);
+}
+
+.eqm-root .zero-line {
+  position: absolute;
+  left: 50%;
+  top: -4px;
+  bottom: -4px;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.eqm-root .comparison-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+}
+
+.eqm-root .comparison-stat {
+  background: var(--bg-tertiary);
+  border-radius: 12px;
+  padding: 1rem;
+}
+
+/* Export panel */
+.eqm-root .export-panel {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  padding: 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+.eqm-root .export-summary {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 1.5rem;
+}
+
+.eqm-root .summary-card,
+.eqm-root .quick-view {
+  background: var(--bg-tertiary);
+  border-radius: 12px;
+  padding: 1.5rem;
+}
+
+.eqm-root .summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.eqm-root .format-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 1rem;
+}
+
+.eqm-root .export-card {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  padding: 1rem;
+  position: relative;
+  text-align: center;
+}
+
+.eqm-root .export-card.recommended {
+  border-color: var(--accent-blue);
+}
+
+.eqm-root .recommended-badge,
+.eqm-root .exported-badge {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: var(--accent-blue);
+  color: #fff;
+  padding: 0.25rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+}
+
+.eqm-root .exported-badge {
+  background: var(--accent-green);
+}
+
+.eqm-root .card-icon {
+  font-size: 2rem;
+  margin-bottom: 0.5rem;
+}
+
+.eqm-root .btn-export {
+  width: 100%;
+  margin-top: 1rem;
+}
+
+.eqm-root .btn-success {
+  background: var(--accent-green);
+  color: #0b1f0b;
+}
+
+.eqm-root .export-instructions {
+  background: var(--bg-tertiary);
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+}
+
+.eqm-root .export-success {
+  text-align: center;
+  background: rgba(74, 222, 128, 0.12);
+  border: 1px solid var(--accent-green);
+  color: var(--accent-green);
+  padding: 0.75rem;
+  border-radius: 8px;
+}
+
+@media (max-width: 900px) {
+  .eqm-main {
+    padding: 1.25rem;
+  }
+
+  .eqm-root .export-summary {
+    grid-template-columns: 1fr;
+  }
+}
