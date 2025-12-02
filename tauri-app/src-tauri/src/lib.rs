@@ -1,4 +1,5 @@
 mod ai_engine;
+mod ai_engine_tests;
 mod audio;
 mod dsp;
 mod gemini_client;
