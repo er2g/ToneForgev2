@@ -18,83 +18,80 @@ use tauri::State;
 const MAX_HISTORY: usize = 40;
 const PROMPT_HISTORY_LIMIT: usize = 12;
 const SYSTEM_PROMPT: &str = r#"
-You are ToneForge's autonomous tone engineer with web research capabilities. You always see the complete FX chain and every parameter snapshot.
+You are an autonomous tone engineer for guitar/bass production. You see the complete plugin chain state and must make intelligent modifications based on user requests.
 
-PARAMETER DATA STRUCTURE:
-Each parameter includes:
-- "value": normalized 0.0-1.0 (what you SET in actions)
-- "display": formatted real value ("-6.2 dB", "432 Hz", "12 ms")
-- "unit": measurement unit ("dB", "Hz", "ms", "%")
-- "format_hint": type ("decibel", "frequency", "percentage", "time", "raw")
+=== UNDERSTANDING THE DATA ===
 
-MATHEMATICAL INTERPRETATION:
-Use "display" to understand the parameter's actual scale and current setting.
-Calculate new "display" values proportionally when setting normalized values.
+Each parameter has:
+- value: 0.0-1.0 normalized (what you SET)
+- display: real-world value with units ("-6.2 dB", "432 Hz")
+- format_hint: type (decibel/frequency/percentage/time/raw)
 
-Example calculation:
-- Current: value=0.5, display="-6.0 dB" (assuming ±12 dB range)
-- If you set value=0.75, new display ≈ "+3.0 dB"
-- Show in changes_table: old_value="-6.0 dB", new_value="+3.0 dB"
+Each FX has:
+- enabled: whether plugin is active
+- params: all parameters with current state
 
-HIERARCHICAL VALIDATION (CRITICAL):
-Before modifying ANY parameter, validate from top to bottom:
-1. Plugin level: Is the FX enabled? (check "enabled" field in fx)
-2. Section level: If parameter belongs to a section (e.g., "Overdrive On", "Delay Enable"), is that section active?
-3. Parameter level: Is the control itself accessible and not bypassed?
+=== YOUR CAPABILITIES ===
 
-Example validation chain:
-- User wants to change "Overdrive Gain"
-- Step 1: Check if plugin "Neural DSP Gojira" is enabled
-- Step 2: Check if "Overdrive On" parameter is enabled (value > 0.5 typically means ON)
-- Step 3: Only then modify "Overdrive Gain"
+1. MODIFY: set_param, toggle_fx, load_plugin
+2. RESEARCH: web_search (use when you don't know tone characteristics)
+3. REASON: Think through the problem before acting
 
-If validation fails at any level:
-- Add a "toggle_fx" or "set_param" action to ENABLE the parent control FIRST
-- Then proceed with the actual change
-- Document this in changes_table and reason field
+=== CRITICAL PRINCIPLES ===
 
-RESEARCH CAPABILITY:
-You have access to web search. When user requests a specific tone or style you're unfamiliar with:
-1. Use "web_search" action to research: "Neural DSP Gojira settings for Metallica tone"
-2. Use "web_search" to find plugin recommendations: "best VST plugins for jazz guitar clean tone"
-3. Synthesize findings into parameter changes
-4. Document your research source in the reason field
+🔴 HIERARCHICAL VALIDATION:
+Before touching ANY control, verify the hierarchy:
+Plugin enabled? → Section/pedal enabled? → Parameter accessible?
 
-Action types:
-- "set_param": Change a parameter value
-- "toggle_fx": Enable/disable an FX
-- "load_plugin": Add a new plugin
-- "web_search": Research tone/plugin information (query: "your search query")
-- "noop": No changes needed
+If something is disabled at ANY level, enable it FIRST, then proceed.
+Example: Changing "Overdrive Gain" requires:
+  1. Plugin enabled ✓
+  2. "Overdrive On" parameter = active ✓
+  3. Then modify gain
 
-Rules:
-1. Always respond with pure JSON only. Shape:
+🔴 POST-ACTION VERIFICATION:
+After you return actions, the system will re-fetch state and show you the results.
+Your actions will be applied, then you'll see if they worked.
+Plan accordingly - if something might need follow-up, mention it.
+
+🔴 RESEARCH, DON'T GUESS:
+Don't know Metallica tone settings? web_search it.
+Unsure which plugin for jazz? web_search it.
+You have internet access - use it.
+
+=== RESPONSE FORMAT ===
+
+Return JSON with this structure (but express yourself naturally):
 {
-  "summary": "<brief overall description>",
+  "summary": "Your brief explanation of what you're doing and why",
   "changes_table": [
-    {
-      "plugin": "<plugin name>",
-      "parameter": "<param name>",
-      "old_value": "<from display field>",
-      "new_value": "<calculated display value>",
-      "reason": "<why>"
-    }
+    {"plugin": "...", "parameter": "...", "old_value": "...", "new_value": "...", "reason": "..."}
   ],
   "actions": [
-    { "type": "set_param", "track": <track_index>, "fx_index": <fx_index>, "param_index": <param_index>, "value": <0.0-1.0>, "reason": "..." },
-    { "type": "web_search", "query": "search query", "reason": "..." }
+    {"type": "set_param", "track": 0, "fx_index": 0, "param_index": 1, "value": 0.75, "reason": "..."},
+    {"type": "web_search", "query": "Neural DSP Gojira Metallica settings", "reason": "..."},
+    {"type": "toggle_fx", "track": 0, "fx_index": 0, "enabled": true, "reason": "..."}
   ]
 }
 
-2. In changes_table: use display values with units for old_value and new_value
-3. Calculate new display values based on parameter range and your normalized value
-4. Keep summary concise (1-2 sentences max)
-5. Keep tone concise and technical
-6. CRITICAL - HIERARCHICAL VALIDATION: Always check plugin → section → parameter is enabled
-7. CRITICAL - Use "display" field to understand parameter scale and calculate changes
-8. CRITICAL - If a control is disabled, ENABLE IT FIRST before modifying its parameters
-9. PLUGIN SELECTION INTELLIGENCE - Choose industry-standard, professional-grade plugins
-10. USE WEB SEARCH - Don't guess tone settings, research them if needed
+changes_table is for USER visibility (show display values).
+actions is for EXECUTION (use normalized 0-1 values).
+
+=== THINK FREELY ===
+
+- Use your judgment on parameter ranges
+- Calculate display values based on parameter type
+- Explain your reasoning naturally
+- If uncertain, research or ask for clarification
+- Multi-step changes are fine (enable, then modify, then verify)
+
+=== WHAT YOU SEE VS WHAT USER SEES ===
+
+You see: Raw JSON snapshot, all parameters, technical data
+User sees: Your summary + changes_table in a nice format
+User does NOT see: The actions array, technical logs, or internal reasoning
+
+Be technical in actions, human in summary/changes_table.
 "#;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -387,32 +384,53 @@ async fn apply_actions(
                         }
 
                         if let Some(param_state) = find_param(fx_state, *param_index) {
+                            let old_value = param_state.display.clone();
+
                             reaper
                                 .set_param(*track, *fx_index, &param_state.name, *value)
                                 .await
                                 .map_err(|e| e.to_string())?;
+
                             logs.push(format!(
-                                "{} :: {} -> {} = {:.1}% ({})",
+                                "✓ {} :: {} -> {} = {:.1}% ({})",
                                 track_state.name,
                                 fx_state.name,
                                 param_state.name,
                                 value * 100.0,
                                 reason.clone().unwrap_or_else(|| "no reason".into())
                             ));
+
+                            // POST-ACTION VERIFICATION: Re-fetch the parameter to confirm
+                            match reaper.get_fx_params(*track, *fx_index).await {
+                                Ok(updated_snapshot) => {
+                                    if let Some(updated_param) = updated_snapshot.params.iter()
+                                        .find(|p| p.index == *param_index) {
+                                        logs.push(format!(
+                                            "  ↳ Verified: {} → {} (was: {})",
+                                            param_state.name,
+                                            updated_param.display,
+                                            old_value
+                                        ));
+                                    }
+                                }
+                                Err(e) => {
+                                    logs.push(format!("  ⚠️  Could not verify change: {}", e));
+                                }
+                            }
                         } else {
                             logs.push(format!(
-                                "Skipped set_param: param {} not found on {}",
+                                "⚠️  Skipped set_param: param {} not found on {}",
                                 param_index, fx_state.name
                             ));
                         }
                     } else {
                         logs.push(format!(
-                            "Skipped set_param: fx {} not found on track {}",
+                            "⚠️  Skipped set_param: fx {} not found on track {}",
                             fx_index, track_state.name
                         ));
                     }
                 } else {
-                    logs.push(format!("Skipped set_param: track {} missing", track));
+                    logs.push(format!("⚠️  Skipped set_param: track {} missing", track));
                 }
             }
             PlannedAction::ToggleFx {
@@ -426,12 +444,30 @@ async fn apply_actions(
                     .await
                     .map_err(|e| e.to_string())?;
                 logs.push(format!(
-                    "Track {} FX {} toggled to {} ({})",
+                    "✓ Track {} FX {} toggled to {} ({})",
                     track,
                     fx_index,
                     enabled,
                     reason.clone().unwrap_or_else(|| "no reason".into())
                 ));
+
+                // POST-ACTION VERIFICATION: Re-fetch tracks to confirm
+                match reaper.get_tracks().await {
+                    Ok(overview) => {
+                        if let Some(t) = overview.tracks.iter().find(|t| t.index == *track) {
+                            if let Some(fx) = t.fx_list.iter().find(|f| f.index == *fx_index) {
+                                logs.push(format!(
+                                    "  ↳ Verified: '{}' is now {}",
+                                    fx.name,
+                                    if fx.enabled { "ENABLED" } else { "DISABLED" }
+                                ));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        logs.push(format!("  ⚠️  Could not verify toggle: {}", e));
+                    }
+                }
             }
             PlannedAction::LoadPlugin {
                 track,
@@ -444,12 +480,29 @@ async fn apply_actions(
                     .await
                     .map_err(|e| e.to_string())?;
                 logs.push(format!(
-                    "Loaded '{}' on track {} slot {} ({})",
+                    "✓ Loaded '{}' on track {} slot {} ({})",
                     plugin_name,
                     track,
                     slot,
                     reason.clone().unwrap_or_else(|| "no reason".into())
                 ));
+
+                // POST-ACTION VERIFICATION: Check if plugin loaded
+                match reaper.get_tracks().await {
+                    Ok(overview) => {
+                        if let Some(t) = overview.tracks.iter().find(|t| t.index == *track) {
+                            if let Some(fx) = t.fx_list.iter().find(|f| f.index == slot) {
+                                logs.push(format!(
+                                    "  ↳ Verified: '{}' loaded at slot {} (enabled: {})",
+                                    fx.name, slot, fx.enabled
+                                ));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        logs.push(format!("  ⚠️  Could not verify load: {}", e));
+                    }
+                }
             }
             PlannedAction::WebSearch { query, reason } => {
                 logs.push(format!(
@@ -459,17 +512,17 @@ async fn apply_actions(
                 ));
                 match perform_web_search(query).await {
                     Ok(result) => {
-                        logs.push(format!("✓ Search completed: {}", &result[..200.min(result.len())]));
+                        logs.push(format!("  ✓ Search completed: {}", &result[..200.min(result.len())]));
                     }
                     Err(e) => {
-                        logs.push(format!("⚠️  Search failed: {}", e));
+                        logs.push(format!("  ⚠️  Search failed: {}", e));
                     }
                 }
             }
             PlannedAction::Noop { reason } => {
                 logs.push(format!(
-                    "AI noop: {}",
-                    reason.clone().unwrap_or_else(|| "no changes".into())
+                    "ℹ️  No action: {}",
+                    reason.clone().unwrap_or_else(|| "no changes needed".into())
                 ));
             }
         }
