@@ -1,4 +1,5 @@
 mod ai_engine;
+mod ai_engine_tests;
 mod audio;
 mod dsp;
 mod gemini_client;
@@ -18,6 +19,15 @@ use tauri::State;
 
 const MAX_HISTORY: usize = 40;
 const PROMPT_HISTORY_LIMIT: usize = 12;
+
+// Helper to handle mutex poisoning gracefully
+fn lock_or_recover<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<T> {
+    mutex.lock().unwrap_or_else(|poisoned| {
+        eprintln!("⚠️  Mutex was poisoned, recovering...");
+        poisoned.into_inner()
+    })
+}
+
 const SYSTEM_PROMPT: &str = r#"
 You are an autonomous tone engineer for guitar/bass production. You see the complete plugin chain state and must make intelligent modifications based on user requests.
 
@@ -119,6 +129,7 @@ struct AppState {
     reaper: Mutex<ReaperClient>,
     ai_provider: Mutex<Option<AIProvider>>,
     chat_history: Mutex<Vec<ChatMessage>>,
+    http_client: reqwest::Client, // Reusable HTTP client (no mutex needed - Clone is cheap)
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -183,7 +194,7 @@ struct AIPlan {
     actions: Vec<PlannedAction>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 enum PlannedAction {
     #[serde(rename = "set_param")]
@@ -332,8 +343,7 @@ fn find_param<'a>(fx: &'a FxState, param_idx: i32) -> Option<&'a FxParamState> {
     fx.params.iter().find(|p| p.index == param_idx)
 }
 
-async fn perform_web_search(query: &str) -> Result<String, String> {
-    let client = reqwest::Client::new();
+async fn perform_web_search(client: &reqwest::Client, query: &str) -> Result<String, String> {
     let search_url = format!(
         "https://html.duckduckgo.com/html/?q={}",
         urlencoding::encode(query)
@@ -356,6 +366,7 @@ async fn perform_web_search(query: &str) -> Result<String, String> {
 
 async fn apply_actions(
     reaper: &ReaperClient,
+    http_client: &reqwest::Client,
     tracks: &[TrackSnapshot],
     actions: &[PlannedAction],
 ) -> Result<Vec<String>, String> {
@@ -511,7 +522,7 @@ async fn apply_actions(
                     query,
                     reason.clone().unwrap_or_else(|| "gathering info".into())
                 ));
-                match perform_web_search(query).await {
+                match perform_web_search(http_client, query).await {
                     Ok(result) => {
                         logs.push(format!("  ✓ Search completed: {}", &result[..200.min(result.len())]));
                     }
@@ -622,7 +633,7 @@ fn calculate_q_from_bandwidth(center_freq: f32, bandwidth: f32) -> f32 {
 
 #[tauri::command]
 async fn check_reaper_connection(state: State<'_, AppState>) -> Result<bool, String> {
-    let reaper = { state.reaper.lock().unwrap().clone() };
+    let reaper = { lock_or_recover(&state.reaper).clone() };
     reaper.ping().await.map_err(|e| e.to_string())
 }
 
@@ -640,12 +651,12 @@ async fn configure_ai_provider(
     };
 
     {
-        let mut guard = state.ai_provider.lock().unwrap();
+        let mut guard = lock_or_recover(&state.ai_provider);
         *guard = Some(ai_provider);
     }
 
     {
-        let mut history = state.chat_history.lock().unwrap();
+        let mut history = lock_or_recover(&state.chat_history);
         history.clear();
     }
 
@@ -654,7 +665,7 @@ async fn configure_ai_provider(
 
 #[tauri::command]
 fn get_chat_history(state: State<'_, AppState>) -> Result<String, String> {
-    let history = state.chat_history.lock().unwrap();
+    let history = lock_or_recover(&state.chat_history);
     serde_json::to_string(&*history).map_err(|e| e.to_string())
 }
 
@@ -665,7 +676,7 @@ async fn process_chat_message(
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let ai_provider = {
-        let guard = state.ai_provider.lock().unwrap();
+        let guard = lock_or_recover(&state.ai_provider);
         guard
             .clone()
             .ok_or_else(|| "AI provider is not configured".to_string())?
@@ -674,7 +685,7 @@ async fn process_chat_message(
     let track_idx = track.unwrap_or(0).max(0);
 
     {
-        let mut history = state.chat_history.lock().unwrap();
+        let mut history = lock_or_recover(&state.chat_history);
         push_history(
             &mut history,
             ChatMessage {
@@ -685,11 +696,11 @@ async fn process_chat_message(
         );
     }
 
-    let reaper = { state.reaper.lock().unwrap().clone() };
+    let reaper = { lock_or_recover(&state.reaper).clone() };
     let tracks_snapshot = collect_track_snapshots(&reaper).await?;
 
     let history_snapshot = {
-        let history = state.chat_history.lock().unwrap();
+        let history = lock_or_recover(&state.chat_history);
         conversation_for_prompt(&history)
     };
 
@@ -704,38 +715,48 @@ async fn process_chat_message(
     let mut plan = parse_plan(&ai_text)?;
 
     // ========== AI ENGINE: PROFESSIONAL OPTIMIZATIONS ==========
-    println!("[AI ENGINE] Processing {} actions...", plan.actions.len());
+    println!("[AI ENGINE] Processing {} total actions...", plan.actions.len());
 
-    // 1. CONFLICT DETECTION
-    let converted_actions: Vec<ai_engine::ActionPlan> = plan.actions.iter()
-        .filter_map(|action| match action {
+    // Separate SetParam actions for optimization, keep others as-is
+    let mut set_param_actions: Vec<ai_engine::ActionPlan> = Vec::new();
+    let mut other_actions: Vec<PlannedAction> = Vec::new();
+
+    for action in plan.actions.iter() {
+        match action {
             PlannedAction::SetParam { track, fx_index, param_index, value, reason } => {
-                Some(ai_engine::ActionPlan {
+                set_param_actions.push(ai_engine::ActionPlan {
                     track: *track,
                     fx_index: *fx_index,
                     param_index: *param_index,
                     value: *value,
                     reason: reason.clone().unwrap_or_default(),
-                })
+                });
             }
-            _ => None,
-        })
-        .collect();
+            _ => {
+                // Keep ToggleFx, LoadPlugin, WebSearch, Noop as-is
+                other_actions.push(action.clone());
+            }
+        }
+    }
 
-    let conflicts = ai_engine::ActionOptimizer::detect_conflicts(&converted_actions);
+    println!("[AI ENGINE] Split: {} SetParam actions, {} other actions",
+        set_param_actions.len(), other_actions.len());
+
+    // 1. CONFLICT DETECTION (only for SetParam)
+    let conflicts = ai_engine::ActionOptimizer::detect_conflicts(&set_param_actions);
     for conflict in &conflicts {
         println!("[AI ENGINE] ⚠️  {}", conflict);
     }
 
-    // 2. ACTION DEDUPLICATION & OPTIMIZATION
-    let deduplicated = ai_engine::ActionOptimizer::deduplicate(converted_actions);
+    // 2. ACTION DEDUPLICATION & OPTIMIZATION (only for SetParam)
+    let deduplicated = ai_engine::ActionOptimizer::deduplicate(set_param_actions);
     println!(
-        "[AI ENGINE] Deduplicated: {} → {} actions",
-        plan.actions.len(),
+        "[AI ENGINE] Deduplicated SetParam: {} → {} actions",
+        plan.actions.iter().filter(|a| matches!(a, PlannedAction::SetParam { .. })).count(),
         deduplicated.len()
     );
 
-    // 3. SAFETY VALIDATION
+    // 3. SAFETY VALIDATION (only for SetParam)
     let mut safety_warnings = Vec::new();
     for action in &deduplicated {
         // Find parameter name from snapshot
@@ -780,8 +801,9 @@ async fn process_chat_message(
         println!("[AI ENGINE] 🛡️  Safety: {}", warning);
     }
 
-    // Convert back to PlannedAction for apply_actions
-    plan.actions = deduplicated.into_iter().map(|action| {
+    // Rebuild full action list: other_actions FIRST (toggles, loads), then optimized SetParam
+    plan.actions = other_actions;
+    plan.actions.extend(deduplicated.into_iter().map(|action| {
         PlannedAction::SetParam {
             track: action.track,
             fx_index: action.fx_index,
@@ -789,15 +811,18 @@ async fn process_chat_message(
             value: action.value,
             reason: Some(action.reason),
         }
-    }).collect();
+    }));
 
-    let action_logs = apply_actions(&reaper, &tracks_snapshot, &plan.actions).await?;
+    println!("[AI ENGINE] Final action count: {} (ready for execution)", plan.actions.len());
+
+    let http_client = &state.http_client; // Clone is cheap for reqwest::Client
+    let action_logs = apply_actions(&reaper, http_client, &tracks_snapshot, &plan.actions).await?;
     for log in action_logs {
         println!("[AI ACTION] {}", log);
     }
 
     {
-        let mut history = state.chat_history.lock().unwrap();
+        let mut history = lock_or_recover(&state.chat_history);
         push_history(
             &mut history,
             ChatMessage {
@@ -818,7 +843,7 @@ async fn process_chat_message(
 
 #[tauri::command]
 async fn get_track_overview(state: State<'_, AppState>) -> Result<String, String> {
-    let reaper = { state.reaper.lock().unwrap().clone() };
+    let reaper = { lock_or_recover(&state.reaper).clone() };
     let tracks = reaper.get_tracks().await.map_err(|e| e.to_string())?;
     serde_json::to_string(&tracks).map_err(|e| e.to_string())
 }
@@ -830,7 +855,7 @@ async fn set_fx_enabled(
     enabled: bool,
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
-    let reaper = { state.reaper.lock().unwrap().clone() };
+    let reaper = { lock_or_recover(&state.reaper).clone() };
     reaper
         .set_fx_enabled(track, fx, enabled)
         .await
@@ -839,7 +864,7 @@ async fn set_fx_enabled(
 
 #[tauri::command]
 async fn save_preset(name: String, state: State<'_, AppState>) -> Result<String, String> {
-    let reaper = { state.reaper.lock().unwrap().clone() };
+    let reaper = { lock_or_recover(&state.reaper).clone() };
     let path = reaper
         .save_project(&name)
         .await
@@ -849,7 +874,7 @@ async fn save_preset(name: String, state: State<'_, AppState>) -> Result<String,
 
 #[tauri::command]
 async fn load_preset(path: String, state: State<'_, AppState>) -> Result<String, String> {
-    let reaper = { state.reaper.lock().unwrap().clone() };
+    let reaper = { lock_or_recover(&state.reaper).clone() };
     reaper
         .load_project(&path)
         .await
@@ -866,6 +891,7 @@ pub fn run() {
             reaper: Mutex::new(ReaperClient::new()),
             ai_provider: Mutex::new(None),
             chat_history: Mutex::new(Vec::new()),
+            http_client: reqwest::Client::new(), // Shared HTTP client
         })
         .invoke_handler(tauri::generate_handler![
             check_reaper_connection,
