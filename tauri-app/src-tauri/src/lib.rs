@@ -1,3 +1,4 @@
+mod ai_engine;
 mod audio;
 mod dsp;
 mod gemini_client;
@@ -18,49 +19,80 @@ use tauri::State;
 const MAX_HISTORY: usize = 40;
 const PROMPT_HISTORY_LIMIT: usize = 12;
 const SYSTEM_PROMPT: &str = r#"
-You are ToneForge's autonomous tone engineer. You always see the complete FX chain and every parameter snapshot.
+You are an autonomous tone engineer for guitar/bass production. You see the complete plugin chain state and must make intelligent modifications based on user requests.
 
-PARAMETER DATA STRUCTURE:
-Each parameter includes:
-- "value": normalized 0.0-1.0 (what you SET in actions)
-- "display": formatted real value ("-6.2 dB", "432 Hz", "12 ms")
-- "unit": measurement unit ("dB", "Hz", "ms", "%")
-- "format_hint": type ("decibel", "frequency", "percentage", "time", "raw")
+=== UNDERSTANDING THE DATA ===
 
-MATHEMATICAL INTERPRETATION:
-Use "display" to understand the parameter's actual scale and current setting.
-Calculate new "display" values proportionally when setting normalized values.
+Each parameter has:
+- value: 0.0-1.0 normalized (what you SET)
+- display: real-world value with units ("-6.2 dB", "432 Hz")
+- format_hint: type (decibel/frequency/percentage/time/raw)
 
-Example calculation:
-- Current: value=0.5, display="-6.0 dB" (assuming ±12 dB range)
-- If you set value=0.75, new display ≈ "+3.0 dB"
-- Show in changes_table: old_value="-6.0 dB", new_value="+3.0 dB"
+Each FX has:
+- enabled: whether plugin is active
+- params: all parameters with current state
 
-Rules:
-1. Always respond with pure JSON only. Shape:
+=== YOUR CAPABILITIES ===
+
+1. MODIFY: set_param, toggle_fx, load_plugin
+2. RESEARCH: web_search (use when you don't know tone characteristics)
+3. REASON: Think through the problem before acting
+
+=== CRITICAL PRINCIPLES ===
+
+🔴 HIERARCHICAL VALIDATION:
+Before touching ANY control, verify the hierarchy:
+Plugin enabled? → Section/pedal enabled? → Parameter accessible?
+
+If something is disabled at ANY level, enable it FIRST, then proceed.
+Example: Changing "Overdrive Gain" requires:
+  1. Plugin enabled ✓
+  2. "Overdrive On" parameter = active ✓
+  3. Then modify gain
+
+🔴 POST-ACTION VERIFICATION:
+After you return actions, the system will re-fetch state and show you the results.
+Your actions will be applied, then you'll see if they worked.
+Plan accordingly - if something might need follow-up, mention it.
+
+🔴 RESEARCH, DON'T GUESS:
+Don't know Metallica tone settings? web_search it.
+Unsure which plugin for jazz? web_search it.
+You have internet access - use it.
+
+=== RESPONSE FORMAT ===
+
+Return JSON with this structure (but express yourself naturally):
 {
-  "summary": "<brief overall description>",
+  "summary": "Your brief explanation of what you're doing and why",
   "changes_table": [
-    { 
-      "plugin": "<plugin name>", 
-      "parameter": "<param name>", 
-      "old_value": "<from display field>", 
-      "new_value": "<calculated display value>", 
-      "reason": "<why>" 
-    }
+    {"plugin": "...", "parameter": "...", "old_value": "...", "new_value": "...", "reason": "..."}
   ],
   "actions": [
-    { "type": "set_param", "track": <track_index>, "fx_index": <fx_index>, "param_index": <param_index>, "value": <0.0-1.0>, "reason": "..." }
+    {"type": "set_param", "track": 0, "fx_index": 0, "param_index": 1, "value": 0.75, "reason": "..."},
+    {"type": "web_search", "query": "Neural DSP Gojira Metallica settings", "reason": "..."},
+    {"type": "toggle_fx", "track": 0, "fx_index": 0, "enabled": true, "reason": "..."}
   ]
 }
 
-2. In changes_table: use display values with units for old_value and new_value
-3. Calculate new display values based on parameter range and your normalized value
-4. Keep summary concise (1-2 sentences max)
-5. Keep tone concise and technical
-6. CRITICAL - ALWAYS verify controls are ENABLED/ACTIVE before modifying
-7. CRITICAL - Use "display" field to understand parameter scale and calculate changes
-8. PLUGIN SELECTION INTELLIGENCE - Choose industry-standard, professional-grade plugins
+changes_table is for USER visibility (show display values).
+actions is for EXECUTION (use normalized 0-1 values).
+
+=== THINK FREELY ===
+
+- Use your judgment on parameter ranges
+- Calculate display values based on parameter type
+- Explain your reasoning naturally
+- If uncertain, research or ask for clarification
+- Multi-step changes are fine (enable, then modify, then verify)
+
+=== WHAT YOU SEE VS WHAT USER SEES ===
+
+You see: Raw JSON snapshot, all parameters, technical data
+User sees: Your summary + changes_table in a nice format
+User does NOT see: The actions array, technical logs, or internal reasoning
+
+Be technical in actions, human in summary/changes_table.
 "#;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -174,6 +206,11 @@ enum PlannedAction {
         track: i32,
         plugin_name: String,
         position: Option<i32>,
+        reason: Option<String>,
+    },
+    #[serde(rename = "web_search")]
+    WebSearch {
+        query: String,
         reason: Option<String>,
     },
     #[serde(rename = "noop")]
@@ -295,6 +332,28 @@ fn find_param<'a>(fx: &'a FxState, param_idx: i32) -> Option<&'a FxParamState> {
     fx.params.iter().find(|p| p.index == param_idx)
 }
 
+async fn perform_web_search(query: &str) -> Result<String, String> {
+    let client = reqwest::Client::new();
+    let search_url = format!(
+        "https://html.duckduckgo.com/html/?q={}",
+        urlencoding::encode(query)
+    );
+
+    let response = client
+        .get(&search_url)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .send()
+        .await
+        .map_err(|e| format!("Web search failed: {}", e))?;
+
+    let html = response.text().await.map_err(|e| e.to_string())?;
+
+    // Simple extraction: get first 500 chars of HTML as context
+    // In production, you'd parse this properly or use a search API
+    let preview = html.chars().take(1000).collect::<String>();
+    Ok(format!("Search results preview for '{}': {}", query, preview))
+}
+
 async fn apply_actions(
     reaper: &ReaperClient,
     tracks: &[TrackSnapshot],
@@ -312,33 +371,67 @@ async fn apply_actions(
             } => {
                 if let Some(track_state) = find_track(tracks, *track) {
                     if let Some(fx_state) = find_fx(track_state, *fx_index) {
+                        // HIERARCHICAL VALIDATION: Check if FX is enabled
+                        if !fx_state.enabled {
+                            logs.push(format!(
+                                "⚠️  Plugin '{}' is DISABLED. Enabling it first...",
+                                fx_state.name
+                            ));
+                            reaper
+                                .set_fx_enabled(*track, *fx_index, true)
+                                .await
+                                .map_err(|e| e.to_string())?;
+                            logs.push(format!("✓ Enabled '{}'", fx_state.name));
+                        }
+
                         if let Some(param_state) = find_param(fx_state, *param_index) {
+                            let old_value = param_state.display.clone();
+
                             reaper
                                 .set_param(*track, *fx_index, &param_state.name, *value)
                                 .await
                                 .map_err(|e| e.to_string())?;
+
                             logs.push(format!(
-                                "{} :: {} -> {} = {:.1}% ({})",
+                                "✓ {} :: {} -> {} = {:.1}% ({})",
                                 track_state.name,
                                 fx_state.name,
                                 param_state.name,
                                 value * 100.0,
                                 reason.clone().unwrap_or_else(|| "no reason".into())
                             ));
+
+                            // POST-ACTION VERIFICATION: Re-fetch the parameter to confirm
+                            match reaper.get_fx_params(*track, *fx_index).await {
+                                Ok(updated_snapshot) => {
+                                    if let Some(updated_param) = updated_snapshot.params.iter()
+                                        .find(|p| p.index == *param_index) {
+                                        logs.push(format!(
+                                            "  ↳ Verified: {} → {} (was: {})",
+                                            param_state.name,
+                                            updated_param.display,
+                                            old_value
+                                        ));
+                                    }
+                                }
+                                Err(e) => {
+                                    logs.push(format!("  ⚠️  Could not verify change: {}", e));
+                                }
+                            }
                         } else {
                             logs.push(format!(
-                                "Skipped set_param: param {} not found on {}",
+                                "⚠️  Skipped set_param: param {} not found on {}",
                                 param_index, fx_state.name
                             ));
                         }
                     } else {
                         logs.push(format!(
-                            "Skipped set_param: fx {} not found on track {}",
+                            "⚠️  Skipped set_param: fx {} not found on track {}",
                             fx_index, track_state.name
                         ));
                     }
                 } else {
-                    logs.push(format!("Skipped set_param: track {} missing", track));
+                    logs.push(format!("⚠️  Skipped set_param: track {} missing", track));
                 }
             }
             PlannedAction::ToggleFx {
@@ -352,12 +445,30 @@ async fn apply_actions(
                     .await
                     .map_err(|e| e.to_string())?;
                 logs.push(format!(
-                    "Track {} FX {} toggled to {} ({})",
+                    "✓ Track {} FX {} toggled to {} ({})",
                     track,
                     fx_index,
                     enabled,
                     reason.clone().unwrap_or_else(|| "no reason".into())
                 ));
+
+                // POST-ACTION VERIFICATION: Re-fetch tracks to confirm
+                match reaper.get_tracks().await {
+                    Ok(overview) => {
+                        if let Some(t) = overview.tracks.iter().find(|t| t.index == *track) {
+                            if let Some(fx) = t.fx_list.iter().find(|f| f.index == *fx_index) {
+                                logs.push(format!(
+                                    "  ↳ Verified: '{}' is now {}",
+                                    fx.name,
+                                    if fx.enabled { "ENABLED" } else { "DISABLED" }
+                                ));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        logs.push(format!("  ⚠️  Could not verify toggle: {}", e));
+                    }
+                }
             }
             PlannedAction::LoadPlugin {
                 track,
@@ -370,17 +481,49 @@ async fn apply_actions(
                     .await
                     .map_err(|e| e.to_string())?;
                 logs.push(format!(
-                    "Loaded '{}' on track {} slot {} ({})",
+                    "✓ Loaded '{}' on track {} slot {} ({})",
                     plugin_name,
                     track,
                     slot,
                     reason.clone().unwrap_or_else(|| "no reason".into())
                 ));
+
+                // POST-ACTION VERIFICATION: Check if plugin loaded
+                match reaper.get_tracks().await {
+                    Ok(overview) => {
+                        if let Some(t) = overview.tracks.iter().find(|t| t.index == *track) {
+                            if let Some(fx) = t.fx_list.iter().find(|f| f.index == slot) {
+                                logs.push(format!(
+                                    "  ↳ Verified: '{}' loaded at slot {} (enabled: {})",
+                                    fx.name, slot, fx.enabled
+                                ));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        logs.push(format!("  ⚠️  Could not verify load: {}", e));
+                    }
+                }
+            }
+            PlannedAction::WebSearch { query, reason } => {
+                logs.push(format!(
+                    "🔍 Researching: '{}' ({})",
+                    query,
+                    reason.clone().unwrap_or_else(|| "gathering info".into())
+                ));
+                match perform_web_search(query).await {
+                    Ok(result) => {
+                        logs.push(format!("  ✓ Search completed: {}", &result[..200.min(result.len())]));
+                    }
+                    Err(e) => {
+                        logs.push(format!("  ⚠️  Search failed: {}", e));
+                    }
+                }
             }
             PlannedAction::Noop { reason } => {
                 logs.push(format!(
-                    "AI noop: {}",
-                    reason.clone().unwrap_or_else(|| "no changes".into())
+                    "ℹ️  No action: {}",
+                    reason.clone().unwrap_or_else(|| "no changes needed".into())
                 ));
             }
         }
@@ -558,7 +701,95 @@ async fn process_chat_message(
 
     let prompt = build_prompt(&payload)?;
     let ai_text = ai_provider.generate(&prompt).await.map_err(|e| e.to_string())?;
-    let plan = parse_plan(&ai_text)?;
+    let mut plan = parse_plan(&ai_text)?;
+
+    // ========== AI ENGINE: PROFESSIONAL OPTIMIZATIONS ==========
+    println!("[AI ENGINE] Processing {} actions...", plan.actions.len());
+
+    // 1. CONFLICT DETECTION
+    let converted_actions: Vec<ai_engine::ActionPlan> = plan.actions.iter()
+        .filter_map(|action| match action {
+            PlannedAction::SetParam { track, fx_index, param_index, value, reason } => {
+                Some(ai_engine::ActionPlan {
+                    track: *track,
+                    fx_index: *fx_index,
+                    param_index: *param_index,
+                    value: *value,
+                    reason: reason.clone().unwrap_or_default(),
+                })
+            }
+            _ => None,
+        })
+        .collect();
+
+    let conflicts = ai_engine::ActionOptimizer::detect_conflicts(&converted_actions);
+    for conflict in &conflicts {
+        println!("[AI ENGINE] ⚠️  {}", conflict);
+    }
+
+    // 2. ACTION DEDUPLICATION & OPTIMIZATION
+    let deduplicated = ai_engine::ActionOptimizer::deduplicate(converted_actions);
+    println!(
+        "[AI ENGINE] Deduplicated: {} → {} actions",
+        plan.actions.len(),
+        deduplicated.len()
+    );
+
+    // 3. SAFETY VALIDATION
+    let mut safety_warnings = Vec::new();
+    for action in &deduplicated {
+        // Find parameter name from snapshot
+        if let Some(track_state) = find_track(&tracks_snapshot, action.track) {
+            if let Some(fx_state) = find_fx(track_state, action.fx_index) {
+                if let Some(param_state) = find_param(fx_state, action.param_index) {
+                    let (clamped_value, warning) =
+                        ai_engine::SafetyValidator::validate_value(&param_state.name, action.value);
+
+                    if let Some(warn) = warning {
+                        safety_warnings.push(format!(
+                            "{} :: {} -> {}: {}",
+                            fx_state.name, param_state.name, clamped_value, warn
+                        ));
+                    }
+
+                    // 4. SEMANTIC ANALYSIS & RELATIONSHIP SUGGESTIONS
+                    let category = ai_engine::SemanticAnalyzer::categorize(&param_state.name);
+                    println!(
+                        "[AI ENGINE] Parameter '{}' categorized as {:?}",
+                        param_state.name, category
+                    );
+
+                    let suggestions = ai_engine::RelationshipEngine::suggest_compensations(
+                        &param_state.name,
+                        param_state.value,
+                        action.value,
+                    );
+
+                    for (param, delta, reason) in suggestions {
+                        println!(
+                            "[AI ENGINE] 💡 Suggestion: Adjust '{}' by {:.2} ({})",
+                            param, delta, reason
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    for warning in &safety_warnings {
+        println!("[AI ENGINE] 🛡️  Safety: {}", warning);
+    }
+
+    // Convert back to PlannedAction for apply_actions
+    plan.actions = deduplicated.into_iter().map(|action| {
+        PlannedAction::SetParam {
+            track: action.track,
+            fx_index: action.fx_index,
+            param_index: action.param_index,
+            value: action.value,
+            reason: Some(action.reason),
+        }
+    }).collect();
 
     let action_logs = apply_actions(&reaper, &tracks_snapshot, &plan.actions).await?;
     for log in action_logs {
