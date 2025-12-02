@@ -197,7 +197,23 @@ build.bat
 - [ ] AI tone matching (referans tonunu analiz et)
 
 ## 🐛 Bilinen Sınırlamalar
+- **Platform kapsamı:** Uygulama fiilen Windows üzerinde test edilmiş durumda; macOS portu teorik olarak hazır olsa da doğrulanmadı, Linux desteği ise plan aşamasında.
+- **Multi-track desteği eksik:** REAPER entegrasyonu yalnızca Track 0 üzerinde çalışıyor; paralel chain veya bus kullanımları henüz mümkün değil.
+- **Preset doğruluğu sınırlı:** Temel preset sistemi yalnızca plugin listesini saklıyor, VST3 chunk/parametre değerleri kaydedilmediği için tonu birebir geri çağırmak mümkün değil.
+- **Parametre automation kaydı yok:** Otomasyon eğrileri veya kayıt özelliği henüz uygulanmadı; roadmap’te v2.0 için hedefleniyor.
+- **Otomatik plugin keşfi yok:** Plugin taraması yapılmadığı için kullanıcıların plugin adını manuel girmesi gerekiyor.
+- **Gerçek zamanlı analiz araçları eksik:** Real-time waveform gibi performans araçları henüz bulunmuyor; uzun vadede planlı.
 
+### Gerçek zamanlı ses/analiz araçları (detaylı durum)
+- **Mevcut durum:** ToneForge kendi ses motoruna sahip değil; REAPER’ı uzaktan komutlarla kontrol ediyor. Bu nedenle gerçek zamanlı analizler (waveform, spectrum, level meter) için REAPER’dan veri çekmek veya harici bir capture pipeline kurmak gerekiyor.
+- **Teknik ihtiyaçlar:**
+  - **Audio tap erişimi:** REAPER’ın JSFX/extension API’leriyle pre/post-FX seviyesinde audio buffer’ı okunabilir hale getirip IPC üzerinden Rust backend’e aktarmak.
+  - **Streaming kanalı:** Webview/UI’ya düşük gecikmeli veri akışı için ya WebSocket ya da Tauri event streaming kurulmalı; 20–60 FPS güncelleme hedeflenmeli.
+  - **Veri boyutu kontrolü:** Downsample/decimate edilmemiş stereo buffer’ın doğrudan gönderimi CPU/IO yükü doğurur; RMS/peak ve FFT için özetlenmiş veri (örn. 512–2048 samples, Hanning window) gönderilmesi gerekir.
+- **UI gereksinimleri:**
+  - **Waveform ve spectrum widget’ları:** Kanala ve timebase’e göre zoom/pan destekli bir waveform; hızlı pikleri görmek için peak-hold’lu spectrum.
+  - **Gecikme/performans:** Grafik tarafında Canvas/WebGL kullanımı; 16–33 ms update aralığında CPU yükünü sınırlamak için double-buffered çizim.
+- **Roadmap uyumu:** Roadmap’teki v2.0 “Real-time waveform” maddesini kapsar; spectrum/level meter gibi yan araçlar da aynı altyapı üzerine eklenebilir. Öncesinde multi-track ve preset güvenilirliği tamamlanmadan bu yatırımın sınırlı değer üretme riski var.
 1. **Windows Only** (şimdilik)
    - macOS portu hazır ama test edilmedi
    - Linux için ek çalışma gerekir

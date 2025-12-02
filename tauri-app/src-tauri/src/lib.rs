@@ -12,7 +12,10 @@ use audio::profile::{extract_eq_profile, EQProfile};
 use gemini_client::GeminiClient;
 use reaper_client::ReaperClient;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::error::Error;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
@@ -157,6 +160,35 @@ struct TrackSnapshot {
     fx: Vec<FxState>,
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+struct PresetParamState {
+    index: i32,
+    name: String,
+    value: f64,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct PresetFxState {
+    index: i32,
+    name: String,
+    params: Vec<PresetParamState>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct PresetTrackState {
+    index: i32,
+    name: String,
+    fx: Vec<PresetFxState>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct PresetFile {
+    name: String,
+    created_at: u64,
+    project_path: Option<String>,
+    tracks: Vec<PresetTrackState>,
+}
+
 #[derive(Serialize)]
 struct PromptPayload {
     selected_track: i32,
@@ -299,7 +331,15 @@ async fn collect_track_snapshots(reaper: &ReaperClient) -> Result<Vec<TrackSnaps
 
 fn build_prompt(payload: &PromptPayload) -> Result<String, String> {
     let context = serde_json::to_string_pretty(payload).map_err(|e| e.to_string())?;
-    Ok(format!("{SYSTEM_PROMPT}\n\n=== SNAPSHOT START ===\n{}\n=== SNAPSHOT END ===", context))
+    let track_hint = format!(
+        "ACTIVE TARGET TRACK: {} (override by setting 'track' explicitly if you need another track)",
+        payload.selected_track
+    );
+
+    Ok(format!(
+        "{SYSTEM_PROMPT}\n\n{}\n\n=== SNAPSHOT START ===\n{}\n=== SNAPSHOT END ===",
+        track_hint, context
+    ))
 }
 
 fn extract_json_block(text: &str) -> String {
@@ -331,6 +371,59 @@ fn parse_plan(raw: &str) -> Result<AIPlan, String> {
     serde_json::from_str(&candidate).map_err(|e| format!("Failed to parse AI JSON: {}", e))
 }
 
+fn normalize_action_track(
+    action: PlannedAction,
+    selected_track: i32,
+    available_tracks: &HashSet<i32>,
+) -> PlannedAction {
+    let map_track = |track: i32| -> i32 {
+        if available_tracks.contains(&track) {
+            track
+        } else {
+            selected_track
+        }
+    };
+
+    match action {
+        PlannedAction::SetParam {
+            track,
+            fx_index,
+            param_index,
+            value,
+            reason,
+        } => PlannedAction::SetParam {
+            track: map_track(track),
+            fx_index,
+            param_index,
+            value,
+            reason,
+        },
+        PlannedAction::ToggleFx {
+            track,
+            fx_index,
+            enabled,
+            reason,
+        } => PlannedAction::ToggleFx {
+            track: map_track(track),
+            fx_index,
+            enabled,
+            reason,
+        },
+        PlannedAction::LoadPlugin {
+            track,
+            plugin_name,
+            position,
+            reason,
+        } => PlannedAction::LoadPlugin {
+            track: map_track(track),
+            plugin_name,
+            position,
+            reason,
+        },
+        other => other,
+    }
+}
+
 fn find_track<'a>(tracks: &'a [TrackSnapshot], track_idx: i32) -> Option<&'a TrackSnapshot> {
     tracks.iter().find(|t| t.index == track_idx)
 }
@@ -351,7 +444,10 @@ async fn perform_web_search(client: &reqwest::Client, query: &str) -> Result<Str
 
     let response = client
         .get(&search_url)
-        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        )
         .send()
         .await
         .map_err(|e| format!("Web search failed: {}", e))?;
@@ -361,7 +457,10 @@ async fn perform_web_search(client: &reqwest::Client, query: &str) -> Result<Str
     // Simple extraction: get first 500 chars of HTML as context
     // In production, you'd parse this properly or use a search API
     let preview = html.chars().take(1000).collect::<String>();
-    Ok(format!("Search results preview for '{}': {}", query, preview))
+    Ok(format!(
+        "Search results preview for '{}': {}",
+        query, preview
+    ))
 }
 
 async fn apply_actions(
@@ -415,13 +514,14 @@ async fn apply_actions(
                             // POST-ACTION VERIFICATION: Re-fetch the parameter to confirm
                             match reaper.get_fx_params(*track, *fx_index).await {
                                 Ok(updated_snapshot) => {
-                                    if let Some(updated_param) = updated_snapshot.params.iter()
-                                        .find(|p| p.index == *param_index) {
+                                    if let Some(updated_param) = updated_snapshot
+                                        .params
+                                        .iter()
+                                        .find(|p| p.index == *param_index)
+                                    {
                                         logs.push(format!(
                                             "  ↳ Verified: {} → {} (was: {})",
-                                            param_state.name,
-                                            updated_param.display,
-                                            old_value
+                                            param_state.name, updated_param.display, old_value
                                         ));
                                     }
                                 }
@@ -524,7 +624,10 @@ async fn apply_actions(
                 ));
                 match perform_web_search(http_client, query).await {
                     Ok(result) => {
-                        logs.push(format!("  ✓ Search completed: {}", &result[..200.min(result.len())]));
+                        logs.push(format!(
+                            "  ✓ Search completed: {}",
+                            &result[..200.min(result.len())]
+                        ));
                     }
                     Err(e) => {
                         logs.push(format!("  ⚠️  Search failed: {}", e));
@@ -576,7 +679,9 @@ async fn calculate_eq_match(
 async fn export_eq_settings(result: EqMatchResult, format: String) -> Result<String, String> {
     match format.as_str() {
         "reaper" => export_as_reaper_preset(&result.correction_profile),
-        "json" => serde_json::to_string_pretty(&result.correction_profile).map_err(|e| e.to_string()),
+        "json" => {
+            serde_json::to_string_pretty(&result.correction_profile).map_err(|e| e.to_string())
+        }
         "txt" => export_as_text(&result.correction_profile),
         _ => Err("Unknown format".to_string()),
     }
@@ -594,8 +699,8 @@ fn export_as_reaper_preset(profile: &EQProfile) -> Result<String, String> {
         let base_param = i * 5;
         output.push_str(&format!("  {} 1.0\n", base_param));
 
-        let freq_norm = (band.frequency.log2() - 20.0f32.log2())
-            / (20_000.0f32.log2() - 20.0f32.log2());
+        let freq_norm =
+            (band.frequency.log2() - 20.0f32.log2()) / (20_000.0f32.log2() - 20.0f32.log2());
         output.push_str(&format!("  {} {}\n", base_param + 1, freq_norm));
 
         let gain_norm = (band.gain_db + 18.0) / 36.0;
@@ -711,11 +816,24 @@ async fn process_chat_message(
     };
 
     let prompt = build_prompt(&payload)?;
-    let ai_text = ai_provider.generate(&prompt).await.map_err(|e| e.to_string())?;
+    let ai_text = ai_provider
+        .generate(&prompt)
+        .await
+        .map_err(|e| e.to_string())?;
     let mut plan = parse_plan(&ai_text)?;
 
+    let available_tracks: HashSet<i32> = tracks_snapshot.iter().map(|t| t.index).collect();
+    plan.actions = plan
+        .actions
+        .into_iter()
+        .map(|action| normalize_action_track(action, track_idx, &available_tracks))
+        .collect();
+
     // ========== AI ENGINE: PROFESSIONAL OPTIMIZATIONS ==========
-    println!("[AI ENGINE] Processing {} total actions...", plan.actions.len());
+    println!(
+        "[AI ENGINE] Processing {} total actions...",
+        plan.actions.len()
+    );
 
     // Separate SetParam actions for optimization, keep others as-is
     let mut set_param_actions: Vec<ai_engine::ActionPlan> = Vec::new();
@@ -723,7 +841,13 @@ async fn process_chat_message(
 
     for action in plan.actions.iter() {
         match action {
-            PlannedAction::SetParam { track, fx_index, param_index, value, reason } => {
+            PlannedAction::SetParam {
+                track,
+                fx_index,
+                param_index,
+                value,
+                reason,
+            } => {
                 set_param_actions.push(ai_engine::ActionPlan {
                     track: *track,
                     fx_index: *fx_index,
@@ -739,8 +863,11 @@ async fn process_chat_message(
         }
     }
 
-    println!("[AI ENGINE] Split: {} SetParam actions, {} other actions",
-        set_param_actions.len(), other_actions.len());
+    println!(
+        "[AI ENGINE] Split: {} SetParam actions, {} other actions",
+        set_param_actions.len(),
+        other_actions.len()
+    );
 
     // 1. CONFLICT DETECTION (only for SetParam)
     let conflicts = ai_engine::ActionOptimizer::detect_conflicts(&set_param_actions);
@@ -752,7 +879,10 @@ async fn process_chat_message(
     let deduplicated = ai_engine::ActionOptimizer::deduplicate(set_param_actions);
     println!(
         "[AI ENGINE] Deduplicated SetParam: {} → {} actions",
-        plan.actions.iter().filter(|a| matches!(a, PlannedAction::SetParam { .. })).count(),
+        plan.actions
+            .iter()
+            .filter(|a| matches!(a, PlannedAction::SetParam { .. }))
+            .count(),
         deduplicated.len()
     );
 
@@ -803,17 +933,22 @@ async fn process_chat_message(
 
     // Rebuild full action list: other_actions FIRST (toggles, loads), then optimized SetParam
     plan.actions = other_actions;
-    plan.actions.extend(deduplicated.into_iter().map(|action| {
-        PlannedAction::SetParam {
-            track: action.track,
-            fx_index: action.fx_index,
-            param_index: action.param_index,
-            value: action.value,
-            reason: Some(action.reason),
-        }
-    }));
+    plan.actions.extend(
+        deduplicated
+            .into_iter()
+            .map(|action| PlannedAction::SetParam {
+                track: action.track,
+                fx_index: action.fx_index,
+                param_index: action.param_index,
+                value: action.value,
+                reason: Some(action.reason),
+            }),
+    );
 
-    println!("[AI ENGINE] Final action count: {} (ready for execution)", plan.actions.len());
+    println!(
+        "[AI ENGINE] Final action count: {} (ready for execution)",
+        plan.actions.len()
+    );
 
     let http_client = &state.http_client; // Clone is cheap for reqwest::Client
     let action_logs = apply_actions(&reaper, http_client, &tracks_snapshot, &plan.actions).await?;
@@ -848,6 +983,94 @@ async fn get_track_overview(state: State<'_, AppState>) -> Result<String, String
     serde_json::to_string(&tracks).map_err(|e| e.to_string())
 }
 
+async fn capture_preset_with_params(
+    name: &str,
+    reaper: &ReaperClient,
+) -> Result<PresetFile, String> {
+    let tracks = reaper
+        .get_tracks()
+        .await
+        .map_err(|e| format!("Failed to get tracks for preset: {e}"))?;
+
+    let mut preset_tracks = Vec::new();
+    for track in tracks.tracks {
+        let mut fx_states = Vec::new();
+        for fx in track.fx_list {
+            let snapshot = reaper
+                .get_fx_params(track.index, fx.index)
+                .await
+                .map_err(|e| {
+                    format!(
+                        "Failed to get params for track {} fx {}: {e}",
+                        track.index, fx.index
+                    )
+                })?;
+
+            let params = snapshot
+                .params
+                .into_iter()
+                .map(|p| PresetParamState {
+                    index: p.index,
+                    name: p.name,
+                    value: p.value,
+                })
+                .collect();
+
+            fx_states.push(PresetFxState {
+                index: fx.index,
+                name: fx.name,
+                params,
+            });
+        }
+
+        preset_tracks.push(PresetTrackState {
+            index: track.index,
+            name: track.name,
+            fx: fx_states,
+        });
+    }
+
+    Ok(PresetFile {
+        name: name.to_string(),
+        created_at: current_timestamp(),
+        project_path: None,
+        tracks: preset_tracks,
+    })
+}
+
+fn persist_preset_to_disk(preset: &PresetFile) -> Result<String, String> {
+    let mut preset_dir = PathBuf::from("presets");
+    fs::create_dir_all(&preset_dir)
+        .map_err(|e| format!("Failed to create preset directory: {e}"))?;
+
+    preset_dir.push(format!("{}.json", preset.name));
+    let serialized = serde_json::to_string_pretty(preset)
+        .map_err(|e| format!("Failed to serialize preset: {e}"))?;
+    fs::write(&preset_dir, serialized).map_err(|e| format!("Failed to write preset file: {e}"))?;
+
+    Ok(preset_dir.to_string_lossy().to_string())
+}
+
+async fn apply_preset_to_reaper(preset: &PresetFile, reaper: &ReaperClient) -> Result<(), String> {
+    for track in &preset.tracks {
+        for fx in &track.fx {
+            for param in &fx.params {
+                if let Err(err) = reaper
+                    .set_param(track.index, fx.index, &param.name, param.value)
+                    .await
+                {
+                    eprintln!(
+                        "[PRESET] Failed to set param {} on track {} fx {}: {}",
+                        param.name, track.index, fx.index, err
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 async fn set_fx_enabled(
     track: i32,
@@ -865,16 +1088,50 @@ async fn set_fx_enabled(
 #[tauri::command]
 async fn save_preset(name: String, state: State<'_, AppState>) -> Result<String, String> {
     let reaper = { lock_or_recover(&state.reaper).clone() };
-    let path = reaper
+    let project_path = reaper
         .save_project(&name)
         .await
         .map_err(|e| e.to_string())?;
+
+    let mut preset = capture_preset_with_params(&name, &reaper).await?;
+    preset.project_path = Some(project_path.clone());
+    let path = persist_preset_to_disk(&preset)?;
+
+    println!(
+        "[PRESET] Saved '{}' with {} tracks and {} FX to {} (project at {})",
+        name,
+        preset.tracks.len(),
+        preset.tracks.iter().map(|t| t.fx.len()).sum::<usize>(),
+        path,
+        project_path
+    );
+
     Ok(path)
 }
 
 #[tauri::command]
 async fn load_preset(path: String, state: State<'_, AppState>) -> Result<String, String> {
     let reaper = { lock_or_recover(&state.reaper).clone() };
+    let preset_contents = fs::read_to_string(&path).map_err(|e| e.to_string());
+
+    if let Ok(contents) = preset_contents {
+        if let Ok(preset) = serde_json::from_str::<PresetFile>(&contents) {
+            if let Some(project_path) = &preset.project_path {
+                reaper
+                    .load_project(project_path)
+                    .await
+                    .map_err(|e| format!("Failed to load project for preset: {e}"))?;
+            }
+
+            apply_preset_to_reaper(&preset, &reaper).await?;
+            return Ok(format!(
+                "Preset '{}' applied with {} tracks",
+                preset.name,
+                preset.tracks.len()
+            ));
+        }
+    }
+
     reaper
         .load_project(&path)
         .await
