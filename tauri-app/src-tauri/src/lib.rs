@@ -120,6 +120,7 @@ struct AppState {
     reaper: Mutex<ReaperClient>,
     ai_provider: Mutex<Option<AIProvider>>,
     chat_history: Mutex<Vec<ChatMessage>>,
+    http_client: reqwest::Client, // Reusable HTTP client (no mutex needed - Clone is cheap)
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -333,8 +334,7 @@ fn find_param<'a>(fx: &'a FxState, param_idx: i32) -> Option<&'a FxParamState> {
     fx.params.iter().find(|p| p.index == param_idx)
 }
 
-async fn perform_web_search(query: &str) -> Result<String, String> {
-    let client = reqwest::Client::new();
+async fn perform_web_search(client: &reqwest::Client, query: &str) -> Result<String, String> {
     let search_url = format!(
         "https://html.duckduckgo.com/html/?q={}",
         urlencoding::encode(query)
@@ -357,6 +357,7 @@ async fn perform_web_search(query: &str) -> Result<String, String> {
 
 async fn apply_actions(
     reaper: &ReaperClient,
+    http_client: &reqwest::Client,
     tracks: &[TrackSnapshot],
     actions: &[PlannedAction],
 ) -> Result<Vec<String>, String> {
@@ -512,7 +513,7 @@ async fn apply_actions(
                     query,
                     reason.clone().unwrap_or_else(|| "gathering info".into())
                 ));
-                match perform_web_search(query).await {
+                match perform_web_search(http_client, query).await {
                     Ok(result) => {
                         logs.push(format!("  ✓ Search completed: {}", &result[..200.min(result.len())]));
                     }
@@ -805,7 +806,8 @@ async fn process_chat_message(
 
     println!("[AI ENGINE] Final action count: {} (ready for execution)", plan.actions.len());
 
-    let action_logs = apply_actions(&reaper, &tracks_snapshot, &plan.actions).await?;
+    let http_client = &state.http_client; // Clone is cheap for reqwest::Client
+    let action_logs = apply_actions(&reaper, http_client, &tracks_snapshot, &plan.actions).await?;
     for log in action_logs {
         println!("[AI ACTION] {}", log);
     }
@@ -880,6 +882,7 @@ pub fn run() {
             reaper: Mutex::new(ReaperClient::new()),
             ai_provider: Mutex::new(None),
             chat_history: Mutex::new(Vec::new()),
+            http_client: reqwest::Client::new(), // Shared HTTP client
         })
         .invoke_handler(tauri::generate_handler![
             check_reaper_connection,
