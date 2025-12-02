@@ -155,7 +155,12 @@ impl ReaperClient {
         }
 
         let json: serde_json::Value = response.json().await?;
-        let fx_index = json["fx_index"].as_i64().ok_or("Invalid response")? as i32;
+        let fx_index_i64 = json["fx_index"].as_i64().ok_or("Invalid response")?;
+
+        // Safely convert i64 to i32 with bounds checking
+        let fx_index = i32::try_from(fx_index_i64)
+            .map_err(|_| format!("FX index {} out of i32 range", fx_index_i64))?;
+
         Ok(fx_index)
     }
 

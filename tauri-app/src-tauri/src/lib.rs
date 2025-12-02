@@ -19,6 +19,15 @@ use tauri::State;
 
 const MAX_HISTORY: usize = 40;
 const PROMPT_HISTORY_LIMIT: usize = 12;
+
+// Helper to handle mutex poisoning gracefully
+fn lock_or_recover<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<T> {
+    mutex.lock().unwrap_or_else(|poisoned| {
+        eprintln!("⚠️  Mutex was poisoned, recovering...");
+        poisoned.into_inner()
+    })
+}
+
 const SYSTEM_PROMPT: &str = r#"
 You are an autonomous tone engineer for guitar/bass production. You see the complete plugin chain state and must make intelligent modifications based on user requests.
 
@@ -624,7 +633,7 @@ fn calculate_q_from_bandwidth(center_freq: f32, bandwidth: f32) -> f32 {
 
 #[tauri::command]
 async fn check_reaper_connection(state: State<'_, AppState>) -> Result<bool, String> {
-    let reaper = { state.reaper.lock().unwrap().clone() };
+    let reaper = { lock_or_recover(&state.reaper).clone() };
     reaper.ping().await.map_err(|e| e.to_string())
 }
 
@@ -642,12 +651,12 @@ async fn configure_ai_provider(
     };
 
     {
-        let mut guard = state.ai_provider.lock().unwrap();
+        let mut guard = lock_or_recover(&state.ai_provider);
         *guard = Some(ai_provider);
     }
 
     {
-        let mut history = state.chat_history.lock().unwrap();
+        let mut history = lock_or_recover(&state.chat_history);
         history.clear();
     }
 
@@ -656,7 +665,7 @@ async fn configure_ai_provider(
 
 #[tauri::command]
 fn get_chat_history(state: State<'_, AppState>) -> Result<String, String> {
-    let history = state.chat_history.lock().unwrap();
+    let history = lock_or_recover(&state.chat_history);
     serde_json::to_string(&*history).map_err(|e| e.to_string())
 }
 
@@ -667,7 +676,7 @@ async fn process_chat_message(
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let ai_provider = {
-        let guard = state.ai_provider.lock().unwrap();
+        let guard = lock_or_recover(&state.ai_provider);
         guard
             .clone()
             .ok_or_else(|| "AI provider is not configured".to_string())?
@@ -676,7 +685,7 @@ async fn process_chat_message(
     let track_idx = track.unwrap_or(0).max(0);
 
     {
-        let mut history = state.chat_history.lock().unwrap();
+        let mut history = lock_or_recover(&state.chat_history);
         push_history(
             &mut history,
             ChatMessage {
@@ -687,11 +696,11 @@ async fn process_chat_message(
         );
     }
 
-    let reaper = { state.reaper.lock().unwrap().clone() };
+    let reaper = { lock_or_recover(&state.reaper).clone() };
     let tracks_snapshot = collect_track_snapshots(&reaper).await?;
 
     let history_snapshot = {
-        let history = state.chat_history.lock().unwrap();
+        let history = lock_or_recover(&state.chat_history);
         conversation_for_prompt(&history)
     };
 
@@ -813,7 +822,7 @@ async fn process_chat_message(
     }
 
     {
-        let mut history = state.chat_history.lock().unwrap();
+        let mut history = lock_or_recover(&state.chat_history);
         push_history(
             &mut history,
             ChatMessage {
@@ -834,7 +843,7 @@ async fn process_chat_message(
 
 #[tauri::command]
 async fn get_track_overview(state: State<'_, AppState>) -> Result<String, String> {
-    let reaper = { state.reaper.lock().unwrap().clone() };
+    let reaper = { lock_or_recover(&state.reaper).clone() };
     let tracks = reaper.get_tracks().await.map_err(|e| e.to_string())?;
     serde_json::to_string(&tracks).map_err(|e| e.to_string())
 }
@@ -846,7 +855,7 @@ async fn set_fx_enabled(
     enabled: bool,
     state: State<'_, AppState>,
 ) -> Result<bool, String> {
-    let reaper = { state.reaper.lock().unwrap().clone() };
+    let reaper = { lock_or_recover(&state.reaper).clone() };
     reaper
         .set_fx_enabled(track, fx, enabled)
         .await
@@ -855,7 +864,7 @@ async fn set_fx_enabled(
 
 #[tauri::command]
 async fn save_preset(name: String, state: State<'_, AppState>) -> Result<String, String> {
-    let reaper = { state.reaper.lock().unwrap().clone() };
+    let reaper = { lock_or_recover(&state.reaper).clone() };
     let path = reaper
         .save_project(&name)
         .await
@@ -865,7 +874,7 @@ async fn save_preset(name: String, state: State<'_, AppState>) -> Result<String,
 
 #[tauri::command]
 async fn load_preset(path: String, state: State<'_, AppState>) -> Result<String, String> {
-    let reaper = { state.reaper.lock().unwrap().clone() };
+    let reaper = { lock_or_recover(&state.reaper).clone() };
     reaper
         .load_project(&path)
         .await

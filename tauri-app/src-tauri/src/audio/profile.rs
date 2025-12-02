@@ -106,12 +106,28 @@ fn calculate_overall_loudness(magnitudes: &[f32]) -> f32 {
 }
 
 fn calculate_dynamic_range(magnitudes: &[f32]) -> f32 {
-    let mut sorted = magnitudes.to_vec();
-    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    
-    let percentile_95 = sorted[(sorted.len() as f32 * 0.95) as usize];
-    let percentile_5 = sorted[(sorted.len() as f32 * 0.05) as usize];
-    
+    // Filter out NaN values before sorting
+    let mut sorted: Vec<f32> = magnitudes
+        .iter()
+        .copied()
+        .filter(|v| v.is_finite())
+        .collect();
+
+    if sorted.is_empty() {
+        return 0.0; // No valid data
+    }
+
+    // Safe sort: NaN values already filtered out
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Safe array access with bounds checking
+    let len = sorted.len();
+    let idx_95 = ((len - 1) as f32 * 0.95) as usize;
+    let idx_5 = ((len - 1) as f32 * 0.05) as usize;
+
+    let percentile_95 = sorted[idx_95.min(len - 1)];
+    let percentile_5 = sorted[idx_5.min(len - 1)];
+
     percentile_95 - percentile_5
 }
 

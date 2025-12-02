@@ -165,18 +165,25 @@ fn smooth_corrections(bands: &mut [FrequencyBand], factor: f32) {
     if bands.len() < 3 {
         return;
     }
-    
-    let original: Vec<f32> = bands.iter().map(|b| b.gain_db).collect();
-    
+
     // Multi-pass Gaussian-like smoothing
     for pass in 0..3 {
+        // Capture current state for this pass
+        let current: Vec<f32> = bands.iter().map(|b| b.gain_db).collect();
         let weight = factor * (0.7f32).powi(pass); // Decreasing weight each pass
-        
-        for i in 1..bands.len() - 1 {
-            let prev = original[i - 1];
-            let curr = original[i];
-            let next = original[i + 1];
-            
+
+        // Safe loop bounds: 1 to len-1 (exclusive)
+        let len = bands.len();
+        if len < 3 {
+            break;
+        }
+
+        for i in 1..(len - 1) {
+            // Safe indexing: i-1, i, i+1 are all valid since 1 <= i < len-1
+            let prev = current[i - 1];
+            let curr = current[i];
+            let next = current[i + 1];
+
             // 3-point weighted average
             let smoothed = prev * 0.25 + curr * 0.5 + next * 0.25;
             bands[i].gain_db = curr * (1.0 - weight) + smoothed * weight;
