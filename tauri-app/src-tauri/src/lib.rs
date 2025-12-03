@@ -4,6 +4,7 @@ mod audio;
 mod dsp;
 mod gemini_client;
 mod reaper_client;
+mod tone_researcher;
 
 use audio::analyzer::{analyze_spectrum, AnalysisConfig};
 use audio::loader::{load_audio_file, resample_audio};
@@ -11,6 +12,7 @@ use audio::matcher::{match_profiles, MatchConfig as EqMatchConfig, MatchResult a
 use audio::profile::{extract_eq_profile, EQProfile};
 use gemini_client::GeminiClient;
 use reaper_client::ReaperClient;
+use tone_researcher::ToneResearcher;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::error::Error;
@@ -34,6 +36,22 @@ fn lock_or_recover<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<T> {
 const SYSTEM_PROMPT: &str = r#"
 You are an autonomous tone engineer for guitar/bass production. You see the complete plugin chain state and must make intelligent modifications based on user requests.
 
+=== TWO-LAYER AI SYSTEM ===
+
+You are the SECOND AI layer in a two-layer system:
+
+🔍 FIRST LAYER (Tone Research AI):
+- When users request specific tones (e.g., "Chuck Schuldiner Symbolic tone", "Metallica Master of Puppets sound")
+- Automatically searches the internet (Equipboard, forums, YouTube, etc.)
+- Gathers detailed information: equipment, amp settings, effects chain, techniques
+- Provides you with a "TONE RESEARCH RESULTS" section if available
+
+🎛️ SECOND LAYER (You - Tone Implementation AI):
+- You receive the research results from the first AI layer
+- Your job is to IMPLEMENT those findings using available plugins
+- Match the described tone as closely as possible with current plugin parameters
+- If research results are available, USE THEM as your primary reference
+
 === UNDERSTANDING THE DATA ===
 
 Each parameter has:
@@ -48,7 +66,7 @@ Each FX has:
 === YOUR CAPABILITIES ===
 
 1. MODIFY: set_param, toggle_fx, load_plugin
-2. RESEARCH: web_search (use when you don't know tone characteristics)
+2. RESEARCH: web_search (use when you need additional info beyond the first AI layer)
 3. REASON: Think through the problem before acting
 
 === CRITICAL PRINCIPLES ===
@@ -133,6 +151,7 @@ struct AppState {
     ai_provider: Mutex<Option<AIProvider>>,
     chat_history: Mutex<Vec<ChatMessage>>,
     http_client: reqwest::Client, // Reusable HTTP client (no mutex needed - Clone is cheap)
+    tone_researcher: ToneResearcher, // First AI layer for internet research
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -194,6 +213,8 @@ struct PromptPayload {
     selected_track: i32,
     tracks: Vec<TrackSnapshot>,
     recent_messages: Vec<ConversationEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    research_context: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -336,9 +357,16 @@ fn build_prompt(payload: &PromptPayload) -> Result<String, String> {
         payload.selected_track
     );
 
+    // Add research context if available (from first AI layer)
+    let research_section = if let Some(ref research) = payload.research_context {
+        format!("\n\n{}\n", research)
+    } else {
+        String::new()
+    };
+
     Ok(format!(
-        "{SYSTEM_PROMPT}\n\n{}\n\n=== SNAPSHOT START ===\n{}\n=== SNAPSHOT END ===",
-        track_hint, context
+        "{SYSTEM_PROMPT}\n\n{}{}\n\n=== SNAPSHOT START ===\n{}\n=== SNAPSHOT END ===",
+        track_hint, research_section, context
     ))
 }
 
@@ -809,10 +837,31 @@ async fn process_chat_message(
         conversation_for_prompt(&history)
     };
 
+    // ========== TONE RESEARCH LAYER (First AI Layer) ==========
+    // Detect if user is requesting a specific tone and research it from the internet
+    let research_context = if let Some(tone_request) = state.tone_researcher.detect_tone_request(&message) {
+        println!("[TONE RESEARCH] Detected tone request: {:?}", tone_request);
+
+        match state.tone_researcher.research_tone(&tone_request).await {
+            Ok(tone_info) => {
+                println!("[TONE RESEARCH] Research successful! Confidence: {:.0}%", tone_info.confidence * 100.0);
+                let formatted = state.tone_researcher.format_for_ai(&tone_info);
+                Some(formatted)
+            }
+            Err(e) => {
+                println!("[TONE RESEARCH] Research failed: {}", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let payload = PromptPayload {
         selected_track: track_idx,
         tracks: tracks_snapshot.clone(),
         recent_messages: history_snapshot,
+        research_context,
     };
 
     let prompt = build_prompt(&payload)?;
@@ -1149,6 +1198,7 @@ pub fn run() {
             ai_provider: Mutex::new(None),
             chat_history: Mutex::new(Vec::new()),
             http_client: reqwest::Client::new(), // Shared HTTP client
+            tone_researcher: ToneResearcher::new(), // First AI layer for tone research
         })
         .invoke_handler(tauri::generate_handler![
             check_reaper_connection,
