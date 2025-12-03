@@ -523,3 +523,449 @@ button:disabled {
 .sidebar::-webkit-scrollbar-thumb:hover {
   background: var(--accent-blue);
 }
+/* Enhanced animations and transitions */
+
+/* Smooth transitions for all interactive elements */
+button,
+.channel-card,
+.fx-item,
+.ghost-btn,
+input,
+select {
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Enhanced button hover effects */
+button:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(255, 107, 53, 0.3);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+/* Channel card hover animations */
+.channel-card:hover {
+  background: rgba(31, 32, 39, 0.8);
+  border-color: var(--accent);
+  transform: translateX(6px) scale(1.02);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+}
+
+.channel-card.selected {
+  animation: selectPulse 0.3s ease-out;
+}
+
+@keyframes selectPulse {
+  0% {
+    transform: translateX(0) scale(1);
+  }
+  50% {
+    transform: translateX(6px) scale(1.05);
+  }
+  100% {
+    transform: translateX(4px) scale(1);
+  }
+}
+
+/* Channel dot animation */
+.channel-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  transition: all 0.3s ease;
+}
+
+.channel-dot.active {
+  background: var(--success);
+  animation: dotGlow 2s ease-in-out infinite;
+}
+
+.channel-dot.inactive {
+  background: var(--text-secondary);
+  opacity: 0.3;
+}
+
+@keyframes dotGlow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
+  }
+  50% {
+    box-shadow: 0 0 0 4px rgba(34, 197, 94, 0);
+  }
+}
+
+/* FX list hover effects */
+.fx-item {
+  border-left: 3px solid transparent;
+}
+
+.fx-item:hover {
+  background: rgba(255, 255, 255, 0.03);
+  border-left-color: var(--accent);
+  transform: translateX(4px);
+}
+
+.fx-item.enabled {
+  border-left-color: var(--success);
+}
+
+.fx-item.disabled {
+  opacity: 0.6;
+}
+
+/* Message animations */
+.message {
+  animation: messageSlideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes messageSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.message.user {
+  animation: messageSlideInRight 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes messageSlideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Input focus animations */
+input:focus,
+select:focus {
+  outline: none;
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+/* Status pill pulse animation */
+.status-pill.online {
+  position: relative;
+}
+
+.status-pill.online::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 8px;
+  transform: translateY(-50%);
+  width: 6px;
+  height: 6px;
+  background: var(--success);
+  border-radius: 50%;
+  animation: statusPulse 2s ease-in-out infinite;
+}
+
+@keyframes statusPulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: translateY(-50%) scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: translateY(-50%) scale(1.2);
+  }
+}
+
+/* Ghost button hover enhancement */
+.ghost-btn:hover:not(:disabled) {
+  background: rgba(255, 107, 53, 0.1);
+  transform: scale(1.05);
+}
+
+/* View switcher smooth transition */
+.view-switcher button {
+  position: relative;
+  overflow: hidden;
+}
+
+.view-switcher button::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.1);
+  transform: translateX(-100%);
+  transition: transform 0.3s ease;
+}
+
+.view-switcher button:hover::after {
+  transform: translateX(0);
+}
+
+.view-switcher button.active {
+  transition: all 0.3s ease;
+}
+
+/* Header glow effect on title */
+.app-header h1 {
+  background: linear-gradient(
+    135deg,
+    var(--text-primary) 0%,
+    var(--accent) 100%
+  );
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: titleGlow 3s ease-in-out infinite;
+}
+
+@keyframes titleGlow {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+
+/* Save preset button special effect */
+.primary-btn {
+  position: relative;
+  overflow: hidden;
+}
+
+.primary-btn::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 0;
+  height: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.3);
+  transform: translate(-50%, -50%);
+  transition: width 0.6s, height 0.6s;
+}
+
+.primary-btn:hover::before {
+  width: 300px;
+  height: 300px;
+}
+
+/* Sidebar smooth scrolling */
+.sidebar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--accent) var(--bg-tertiary);
+}
+
+.sidebar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sidebar::-webkit-scrollbar-track {
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+}
+
+.sidebar::-webkit-scrollbar-thumb {
+  background: var(--accent);
+  border-radius: 3px;
+}
+
+.sidebar::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-hover);
+}
+
+/* Chat messages smooth scrolling */
+.chat-messages {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 107, 53, 0.3) transparent;
+}
+
+.chat-messages::-webkit-scrollbar {
+  width: 8px;
+}
+
+.chat-messages::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chat-messages::-webkit-scrollbar-thumb {
+  background: rgba(255, 107, 53, 0.3);
+  border-radius: 4px;
+}
+
+.chat-messages::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 107, 53, 0.5);
+}
+
+/* Empty state animation */
+.empty-state {
+  animation: fadeIn 0.5s ease-out;
+  opacity: 0.7;
+}
+
+.chat-placeholder {
+  animation: fadeIn 0.8s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Setup panel entrance animation */
+.setup-panel {
+  animation: scaleIn 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* FX summary badge pulse */
+.fx-summary {
+  animation: fadeIn 0.5s ease-out;
+  transition: all 0.3s ease;
+}
+
+/* Refresh button spin animation */
+.ghost-btn:active {
+  animation: spin 0.5s ease-out;
+}
+
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Loading shimmer effect for inputs */
+input[disabled],
+button[disabled] {
+  position: relative;
+  overflow: hidden;
+}
+
+input[disabled]::after,
+button[disabled]::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.05),
+    transparent
+  );
+  animation: shimmer 2s infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(100%);
+  }
+}
+
+/* Connection status indicator animation */
+.status-indicator {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.status-indicator.connected {
+  animation: connectedBounce 0.5s ease-out;
+}
+
+@keyframes connectedBounce {
+  0% {
+    transform: scale(0.8);
+  }
+  50% {
+    transform: scale(1.1);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.status-indicator.disconnected {
+  animation: disconnectedShake 0.5s ease-out;
+}
+
+@keyframes disconnectedShake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-4px);
+  }
+  75% {
+    transform: translateX(4px);
+  }
+}
+
+/* Improved focus ring for accessibility */
+*:focus-visible {
+  outline: 2px solid var(--accent-blue);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Mobile responsive animations */
+@media (max-width: 768px) {
+  .channel-card:hover {
+    transform: scale(1.02);
+  }
+
+  button:hover:not(:disabled) {
+    transform: translateY(-1px);
+  }
+
+  .message {
+    max-width: 95%;
+  }
+}
+
+/* Reduced motion for accessibility */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

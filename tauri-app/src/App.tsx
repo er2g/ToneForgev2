@@ -2,6 +2,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { EqMatchView } from "./eq-match/EqMatchView";
 import { ChangesTable } from "./components/ChangesTable";
+import { AILayerStatus, AILayerPhase } from "./components/AILayerStatus";
+import { Toast, ToastMessage } from "./components/Toast";
+import { TypingIndicator } from "./components/TypingIndicator";
 import { ChatResponse, ChangeEntry } from "./types";
 import "./App.css";
 
@@ -49,6 +52,9 @@ function App() {
   const [apiKeySet, setApiKeySet] = useState(false);
   const [reaperConnected, setReaperConnected] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [aiPhase, setAiPhase] = useState<AILayerPhase | null>(null);
+  const [aiMessage, setAiMessage] = useState<string>("");
+  const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [tracks, setTracks] = useState<TrackInfo[]>([]);
   const [selectedTrack, setSelectedTrack] = useState(0);
   const [provider, setProvider] = useState<ProviderKey>("gemini");
@@ -60,6 +66,16 @@ function App() {
   const currentTrackFx = currentTrack?.fx_list ?? [];
   const activeFxCount = currentTrackFx.filter((fx) => fx.enabled).length;
   const readyForChat = apiKeySet && reaperConnected;
+
+  // Toast helper
+  const addToast = (type: ToastMessage["type"], message: string, duration?: number) => {
+    const id = `toast-${Date.now()}-${Math.random()}`;
+    setToasts((prev) => [...prev, { id, type, message, duration }]);
+  };
+
+  const dismissToast = (id: string) => {
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  };
 
   useEffect(() => {
     const cached = localStorage.getItem(HISTORY_STORAGE_KEY);
@@ -132,11 +148,11 @@ function App() {
 
   async function handleConfigureAssistant() {
     if (!apiKey.trim()) {
-      alert("Please enter a valid API key");
+      addToast("warning", "Please enter a valid API key");
       return;
     }
     if (!model.trim()) {
-      alert("Please select or enter a model name");
+      addToast("warning", "Please select or enter a model name");
       return;
     }
 
@@ -160,8 +176,9 @@ function App() {
         ]);
       }
       setApiKeySet(true);
+      addToast("success", "AI Assistant configured successfully!");
     } catch (error) {
-      alert("Failed to configure AI provider: " + error);
+      addToast("error", "Failed to configure AI provider: " + error);
     }
   }
 
@@ -175,16 +192,69 @@ function App() {
     };
     setMessages((prev) => [...prev, userMessage]);
     const payload = input;
+    const userInput = input;
     setInput("");
     setLoading(true);
 
+    // AI Phase simulation - in real implementation, backend would send progress updates
+    const simulatePhases = async () => {
+      // Check if message contains tone request keywords
+      const toneKeywords = ["tone", "sound", "tonu", "ses"];
+      const hasToneRequest = toneKeywords.some(keyword =>
+        userInput.toLowerCase().includes(keyword)
+      );
+
+      if (hasToneRequest) {
+        // Phase 1: Detecting
+        setAiPhase("detecting");
+        setAiMessage("Analyzing your tone request...");
+        await new Promise(resolve => setTimeout(resolve, 800));
+
+        // Phase 2: Researching
+        setAiPhase("researching");
+        setAiMessage("Searching internet for tone details...");
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        // Phase 3: Implementing
+        setAiPhase("implementing");
+        setAiMessage("Matching plugins to research results...");
+        await new Promise(resolve => setTimeout(resolve, 1500));
+      } else {
+        // Simple query - skip research phase
+        setAiPhase("implementing");
+        setAiMessage("Processing your request...");
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+
+      // Phase 4: Optimizing
+      setAiPhase("optimizing");
+      setAiMessage("AI Engine optimizations...");
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
+      // Phase 5: Applying
+      setAiPhase("applying");
+      setAiMessage("Setting parameters in REAPER...");
+    };
+
     try {
+      // Start phase simulation
+      const phasePromise = simulatePhases();
+
+      // Actual API call
       const responseString = await invoke<string>("process_chat_message", {
         message: payload,
         track: selectedTrack,
       });
 
+      // Wait for phase animation to complete
+      await phasePromise;
+
       const response: ChatResponse = JSON.parse(responseString);
+
+      // Done phase
+      setAiPhase("done");
+      setAiMessage("Tone created successfully!");
+      await new Promise(resolve => setTimeout(resolve, 1000));
 
       const assistantMessage: Message = {
         role: "assistant",
@@ -194,6 +264,11 @@ function App() {
       };
       setMessages((prev) => [...prev, assistantMessage]);
       await loadTrackOverview();
+
+      // Success toast
+      if (response.changes_table && response.changes_table.length > 0) {
+        addToast("success", `Applied ${response.changes_table.length} changes successfully!`);
+      }
     } catch (error) {
       const errorMessage: Message = {
         role: "assistant",
@@ -201,8 +276,11 @@ function App() {
         timestamp: Date.now(),
       };
       setMessages((prev) => [...prev, errorMessage]);
+      addToast("error", "Failed to process message: " + error);
     } finally {
       setLoading(false);
+      setAiPhase(null);
+      setAiMessage("");
     }
   }
 
@@ -212,9 +290,9 @@ function App() {
 
     try {
       const path = await invoke<string>("save_preset", { name: presetName });
-      alert(`Preset saved to: ${path}`);
+      addToast("success", `Preset saved: ${presetName}`, 6000);
     } catch (error) {
-      alert("Failed to save preset: " + error);
+      addToast("error", "Failed to save preset: " + error);
     }
   }
 
@@ -230,13 +308,15 @@ function App() {
         enabled: !enabled,
       });
       await loadTrackOverview();
+      addToast("info", `FX ${enabled ? "disabled" : "enabled"}`, 2000);
     } catch (error) {
-      alert("Failed to toggle FX: " + error);
+      addToast("error", "Failed to toggle FX: " + error);
     }
   }
 
   return (
     <div className="app-container">
+      <Toast toasts={toasts} onDismiss={dismissToast} />
       <header className="app-header">
         <div className="header-content">
           <h1>🎸 ToneForge</h1>
@@ -471,7 +551,13 @@ function App() {
                     ))}
                     {loading && (
                       <div className="message assistant">
-                        <div className="message-content typing">Thinking...</div>
+                        <div className="message-content">
+                          {aiPhase ? (
+                            <AILayerStatus phase={aiPhase} message={aiMessage} />
+                          ) : (
+                            <TypingIndicator />
+                          )}
+                        </div>
                       </div>
                     )}
                   </>
