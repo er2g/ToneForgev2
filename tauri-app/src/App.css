@@ -219,6 +219,37 @@ button:disabled {
   color: var(--text-secondary);
 }
 
+.ai-engine-report {
+  margin-top: 0.75rem;
+  background: var(--bg-secondary);
+  border: 1px dashed var(--border-color);
+  border-radius: 10px;
+  padding: 0.75rem 0.9rem;
+}
+
+.ai-engine-report summary {
+  cursor: pointer;
+  color: var(--accent-blue);
+  font-weight: 600;
+  margin-bottom: 0.45rem;
+}
+
+.ai-engine-report .engine-report-text {
+  white-space: pre-wrap;
+  background: var(--bg-tertiary);
+  padding: 0.7rem;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  font-size: 0.9rem;
+}
+
+.ai-engine-report .action-log {
+  margin-top: 0.5rem;
+  padding-left: 1.25rem;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
 .message-content.typing {
   font-style: italic;
   color: var(--text-secondary);
@@ -334,12 +365,51 @@ button:disabled {
 }
 
 .api-config select,
-.api-config input {
+.api-config input,
+.api-config textarea {
   padding: 0.7rem 0.9rem;
   border-radius: 8px;
   border: 1px solid var(--border-color);
   background: var(--bg-secondary);
   color: var(--text-primary);
+  resize: vertical;
+}
+
+.config-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.35rem 0 0.6rem;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.65rem;
+  border-radius: 999px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.badge.success {
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.custom-instructions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.custom-instructions textarea {
+  border-radius: 10px;
+  min-height: 110px;
 }
 
 .api-key-form {

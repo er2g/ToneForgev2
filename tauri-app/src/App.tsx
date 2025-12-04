@@ -23,6 +23,8 @@ interface Message {
   content: string;
   changes_table?: ChangeEntry[];
   timestamp?: number;
+  engine_report?: string;
+  action_log?: string[];
 }
 
 interface TrackFX {
@@ -44,12 +46,14 @@ interface TrackResponse {
 }
 
 const HISTORY_STORAGE_KEY = "toneforge_history";
+const CONFIG_STORAGE_KEY = "toneforge_api_config";
 
 function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [apiKey, setApiKey] = useState("");
   const [apiKeySet, setApiKeySet] = useState(false);
+  const [customInstructions, setCustomInstructions] = useState("");
   const [reaperConnected, setReaperConnected] = useState(false);
   const [loading, setLoading] = useState(false);
   const [aiPhase, setAiPhase] = useState<AILayerPhase | null>(null);
@@ -60,6 +64,7 @@ function App() {
   const [provider, setProvider] = useState<ProviderKey>("gemini");
   const [model, setModel] = useState(MODEL_PRESETS.gemini[0]);
   const [activeView, setActiveView] = useState<"assistant" | "eq">("assistant");
+  const [autoConfigAttempted, setAutoConfigAttempted] = useState(false);
 
   const currentTrack =
     tracks.find((track) => track.index === selectedTrack) ?? tracks[0];
@@ -86,6 +91,26 @@ function App() {
         // ignore parse error
       }
     }
+
+    const storedConfig = localStorage.getItem(CONFIG_STORAGE_KEY);
+    if (storedConfig) {
+      try {
+        const parsed = JSON.parse(storedConfig) as {
+          provider?: ProviderKey;
+          model?: string;
+          apiKey?: string;
+          customInstructions?: string;
+        };
+        if (parsed.provider) setProvider(parsed.provider);
+        if (parsed.model) setModel(parsed.model);
+        if (parsed.apiKey) setApiKey(parsed.apiKey);
+        if (parsed.customInstructions) {
+          setCustomInstructions(parsed.customInstructions);
+        }
+      } catch {
+        // ignore parse error
+      }
+    }
   }, []);
 
   useEffect(() => {
@@ -97,10 +122,30 @@ function App() {
   }, [messages]);
 
   useEffect(() => {
+    localStorage.setItem(
+      CONFIG_STORAGE_KEY,
+      JSON.stringify({ provider, model, apiKey, customInstructions })
+    );
+  }, [provider, model, apiKey, customInstructions]);
+
+  useEffect(() => {
     checkReaperConnection();
     const interval = setInterval(checkReaperConnection, 5000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    if (
+      reaperConnected &&
+      !apiKeySet &&
+      apiKey &&
+      model &&
+      !autoConfigAttempted
+    ) {
+      handleConfigureAssistant(true);
+      setAutoConfigAttempted(true);
+    }
+  }, [reaperConnected, apiKey, model, apiKeySet, autoConfigAttempted]);
 
   async function checkReaperConnection() {
     try {
@@ -146,7 +191,7 @@ function App() {
     }
   }
 
-  async function handleConfigureAssistant() {
+  async function handleConfigureAssistant(silent = false) {
     if (!apiKey.trim()) {
       addToast("warning", "Please enter a valid API key");
       return;
@@ -176,9 +221,20 @@ function App() {
         ]);
       }
       setApiKeySet(true);
-      addToast("success", "AI Assistant configured successfully!");
+      localStorage.setItem(
+        CONFIG_STORAGE_KEY,
+        JSON.stringify({ provider, model, apiKey, customInstructions })
+      );
+      addToast(
+        "success",
+        silent
+          ? "Restored saved AI settings."
+          : "AI Assistant configured successfully!"
+      );
     } catch (error) {
-      addToast("error", "Failed to configure AI provider: " + error);
+      if (!silent) {
+        addToast("error", "Failed to configure AI provider: " + error);
+      }
     }
   }
 
@@ -244,6 +300,7 @@ function App() {
       const responseString = await invoke<string>("process_chat_message", {
         message: payload,
         track: selectedTrack,
+        customInstructions,
       });
 
       // Wait for phase animation to complete
@@ -260,6 +317,8 @@ function App() {
         role: "assistant",
         content: response.summary,
         changes_table: response.changes_table,
+        engine_report: response.engine_report,
+        action_log: response.action_log,
         timestamp: Date.now(),
       };
       setMessages((prev) => [...prev, assistantMessage]);
@@ -282,6 +341,14 @@ function App() {
       setAiPhase(null);
       setAiMessage("");
     }
+  }
+
+  function handleClearApiConfig() {
+    localStorage.removeItem(CONFIG_STORAGE_KEY);
+    setApiKey("");
+    setApiKeySet(false);
+    setCustomInstructions("");
+    addToast("info", "Saved API settings cleared");
   }
 
   async function handleSavePreset() {
@@ -359,6 +426,31 @@ function App() {
             <aside className="sidebar">
               {apiKeySet ? (
                 <>
+                  <div className="sidebar-section">
+                    <div className="section-header">
+                      <h3>Assistant Profile</h3>
+                      <button className="ghost-btn" onClick={handleClearApiConfig}>
+                        Forget key
+                      </button>
+                    </div>
+                    <div className="config-badges">
+                      <span className="badge">{provider}</span>
+                      <span className="badge">{model}</span>
+                      <span className="badge success">API saved locally</span>
+                    </div>
+                    <div className="custom-instructions">
+                      <label htmlFor="custom-instructions">Custom instructions</label>
+                      <textarea
+                        id="custom-instructions"
+                        placeholder="Tell the AI how to speak, what to prioritize, or how to route FX..."
+                        value={customInstructions}
+                        onChange={(e) => setCustomInstructions(e.target.value)}
+                        rows={4}
+                      />
+                      <small>Applied to every AI request and saved with your API key.</small>
+                    </div>
+                  </div>
+
                   <div className="sidebar-section">
                     <div className="section-header">
                       <h3>Channels</h3>
@@ -498,6 +590,18 @@ function App() {
                     </datalist>
                   </div>
 
+                  <div className="api-config">
+                    <label htmlFor="custom-instructions-setup">Custom instructions</label>
+                    <textarea
+                      id="custom-instructions-setup"
+                      placeholder="e.g. Favor analog amp sims, keep vocals untouched, respond in Turkish."
+                      value={customInstructions}
+                      onChange={(e) => setCustomInstructions(e.target.value)}
+                      rows={3}
+                    />
+                    <small>Saved locally with your API key and sent with every request.</small>
+                  </div>
+
                   <div className="api-key-form">
                     <input
                       type="password"
@@ -537,6 +641,24 @@ function App() {
                           <p>{msg.content}</p>
                           {msg.changes_table && msg.changes_table.length > 0 && (
                             <ChangesTable changes={msg.changes_table} />
+                          )}
+                          {(msg.engine_report || (msg.action_log && msg.action_log.length > 0)) && (
+                            <details
+                              className="ai-engine-report"
+                              open={idx === messages.length - 1}
+                            >
+                              <summary>AI process details</summary>
+                              {msg.engine_report && (
+                                <pre className="engine-report-text">{msg.engine_report}</pre>
+                              )}
+                              {msg.action_log && msg.action_log.length > 0 && (
+                                <ul className="action-log">
+                                  {msg.action_log.map((entry, logIdx) => (
+                                    <li key={`${idx}-log-${logIdx}`}>{entry}</li>
+                                  ))}
+                                </ul>
+                              )}
+                            </details>
                           )}
                           {msg.timestamp && (
                             <small>
