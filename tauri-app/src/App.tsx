@@ -1,11 +1,18 @@
-﻿import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { EqMatchView } from "./eq-match/EqMatchView";
 import { ChangesTable } from "./components/ChangesTable";
 import { AILayerStatus, AILayerPhase } from "./components/AILayerStatus";
 import { Toast, ToastMessage } from "./components/Toast";
 import { TypingIndicator } from "./components/TypingIndicator";
-import { ChatResponse, ChangeEntry } from "./types";
+import { UndoRedo } from "./components/UndoRedo";
+import { RecentTones } from "./components/RecentTones";
+import { ThemeToggle, useTheme } from "./components/ThemeToggle";
+import { FxSearch } from "./components/FxSearch";
+import { Tooltip } from "./components/Tooltip";
+import { SkeletonChannels, SkeletonFxList } from "./components/Skeleton";
+import { useNotificationSound } from "./hooks/useNotificationSound";
+import { ChatResponse, ChangeEntry, SecureConfig } from "./types";
 import "./App.css";
 
 const PROVIDERS = [
@@ -46,7 +53,6 @@ interface TrackResponse {
 }
 
 const HISTORY_STORAGE_KEY = "toneforge_history";
-const CONFIG_STORAGE_KEY = "toneforge_api_config";
 
 function App() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -56,6 +62,7 @@ function App() {
   const [customInstructions, setCustomInstructions] = useState("");
   const [reaperConnected, setReaperConnected] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [tracksLoading, setTracksLoading] = useState(true);
   const [aiPhase, setAiPhase] = useState<AILayerPhase | null>(null);
   const [aiMessage, setAiMessage] = useState<string>("");
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
@@ -65,48 +72,61 @@ function App() {
   const [model, setModel] = useState(MODEL_PRESETS.gemini[0]);
   const [activeView, setActiveView] = useState<"assistant" | "eq">("assistant");
   const [autoConfigAttempted, setAutoConfigAttempted] = useState(false);
+  const [fxSearchQuery, setFxSearchQuery] = useState("");
+
+  const inputRef = useRef<HTMLInputElement>(null);
+  const { theme, toggleTheme } = useTheme();
+  const { playSuccess, playError, playNotification } = useNotificationSound();
 
   const currentTrack =
     tracks.find((track) => track.index === selectedTrack) ?? tracks[0];
   const currentTrackFx = currentTrack?.fx_list ?? [];
+  const filteredFx = fxSearchQuery
+    ? currentTrackFx.filter((fx) =>
+        fx.name.toLowerCase().includes(fxSearchQuery.toLowerCase())
+      )
+    : currentTrackFx;
   const activeFxCount = currentTrackFx.filter((fx) => fx.enabled).length;
   const readyForChat = apiKeySet && reaperConnected;
 
   // Toast helper
-  const addToast = (type: ToastMessage["type"], message: string, duration?: number) => {
+  const addToast = useCallback((type: ToastMessage["type"], message: string, duration?: number) => {
     const id = `toast-${Date.now()}-${Math.random()}`;
     setToasts((prev) => [...prev, { id, type, message, duration }]);
-  };
+
+    // Play sound based on type
+    if (type === "success") playSuccess();
+    else if (type === "error") playError();
+    else playNotification();
+  }, [playSuccess, playError, playNotification]);
 
   const dismissToast = (id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   };
 
+  // Load secure config on startup
   useEffect(() => {
+    async function loadSecureConfig() {
+      try {
+        const result = await invoke<string>("load_api_config");
+        const config: SecureConfig = JSON.parse(result);
+
+        if (config.api_key) setApiKey(config.api_key);
+        if (config.provider) setProvider(config.provider as ProviderKey);
+        if (config.model) setModel(config.model);
+        if (config.custom_instructions) setCustomInstructions(config.custom_instructions);
+      } catch {
+        // No saved config, that's fine
+      }
+    }
+
+    loadSecureConfig();
+
+    // Load chat history from localStorage
     const cached = localStorage.getItem(HISTORY_STORAGE_KEY);
     if (cached) {
       try {
         setMessages(JSON.parse(cached));
-      } catch {
-        // ignore parse error
-      }
-    }
-
-    const storedConfig = localStorage.getItem(CONFIG_STORAGE_KEY);
-    if (storedConfig) {
-      try {
-        const parsed = JSON.parse(storedConfig) as {
-          provider?: ProviderKey;
-          model?: string;
-          apiKey?: string;
-          customInstructions?: string;
-        };
-        if (parsed.provider) setProvider(parsed.provider);
-        if (parsed.model) setModel(parsed.model);
-        if (parsed.apiKey) setApiKey(parsed.apiKey);
-        if (parsed.customInstructions) {
-          setCustomInstructions(parsed.customInstructions);
-        }
       } catch {
         // ignore parse error
       }
@@ -121,12 +141,17 @@ function App() {
     }
   }, [messages]);
 
+  // Save API config securely when it changes
   useEffect(() => {
-    localStorage.setItem(
-      CONFIG_STORAGE_KEY,
-      JSON.stringify({ provider, model, apiKey, customInstructions })
-    );
-  }, [provider, model, apiKey, customInstructions]);
+    if (apiKeySet && apiKey) {
+      invoke("save_api_config", {
+        apiKey,
+        provider,
+        model,
+        customInstructions: customInstructions || null,
+      }).catch(console.error);
+    }
+  }, [apiKeySet, apiKey, provider, model, customInstructions]);
 
   useEffect(() => {
     checkReaperConnection();
@@ -147,6 +172,30 @@ function App() {
     }
   }, [reaperConnected, apiKey, model, apiKeySet, autoConfigAttempted]);
 
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ctrl+N or Cmd+N to focus chat input
+      if ((e.ctrlKey || e.metaKey) && e.key === "n") {
+        e.preventDefault();
+        inputRef.current?.focus();
+      }
+      // Ctrl+Shift+T to toggle theme
+      if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === "T") {
+        e.preventDefault();
+        toggleTheme();
+      }
+      // Ctrl+S to save preset
+      if ((e.ctrlKey || e.metaKey) && e.key === "s" && reaperConnected) {
+        e.preventDefault();
+        handleSavePreset();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [reaperConnected, toggleTheme]);
+
   async function checkReaperConnection() {
     try {
       const connected = await invoke<boolean>("check_reaper_connection");
@@ -160,6 +209,7 @@ function App() {
   }
 
   async function loadTrackOverview() {
+    setTracksLoading(true);
     try {
       const overview = await invoke<string>("get_track_overview");
       const parsed: TrackResponse = JSON.parse(overview);
@@ -177,6 +227,8 @@ function App() {
       }
     } catch (error) {
       console.error("Failed to load track overview:", error);
+    } finally {
+      setTracksLoading(false);
     }
   }
 
@@ -221,10 +273,15 @@ function App() {
         ]);
       }
       setApiKeySet(true);
-      localStorage.setItem(
-        CONFIG_STORAGE_KEY,
-        JSON.stringify({ provider, model, apiKey, customInstructions })
-      );
+
+      // Save securely
+      await invoke("save_api_config", {
+        apiKey,
+        provider,
+        model,
+        customInstructions: customInstructions || null,
+      });
+
       addToast(
         "success",
         silent
@@ -252,63 +309,52 @@ function App() {
     setInput("");
     setLoading(true);
 
-    // AI Phase simulation - in real implementation, backend would send progress updates
+    // AI Phase simulation
     const simulatePhases = async () => {
-      // Check if message contains tone request keywords
       const toneKeywords = ["tone", "sound", "tonu", "ses"];
       const hasToneRequest = toneKeywords.some(keyword =>
         userInput.toLowerCase().includes(keyword)
       );
 
       if (hasToneRequest) {
-        // Phase 1: Detecting
         setAiPhase("detecting");
         setAiMessage("Analyzing your tone request...");
         await new Promise(resolve => setTimeout(resolve, 800));
 
-        // Phase 2: Researching
         setAiPhase("researching");
         setAiMessage("Searching internet for tone details...");
         await new Promise(resolve => setTimeout(resolve, 2000));
 
-        // Phase 3: Implementing
         setAiPhase("implementing");
         setAiMessage("Matching plugins to research results...");
         await new Promise(resolve => setTimeout(resolve, 1500));
       } else {
-        // Simple query - skip research phase
         setAiPhase("implementing");
         setAiMessage("Processing your request...");
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
 
-      // Phase 4: Optimizing
       setAiPhase("optimizing");
       setAiMessage("AI Engine optimizations...");
       await new Promise(resolve => setTimeout(resolve, 1000));
 
-      // Phase 5: Applying
       setAiPhase("applying");
       setAiMessage("Setting parameters in REAPER...");
     };
 
     try {
-      // Start phase simulation
       const phasePromise = simulatePhases();
 
-      // Actual API call
       const responseString = await invoke<string>("process_chat_message", {
         message: payload,
         track: selectedTrack,
         customInstructions,
       });
 
-      // Wait for phase animation to complete
       await phasePromise;
 
       const response: ChatResponse = JSON.parse(responseString);
 
-      // Done phase
       setAiPhase("done");
       setAiMessage("Tone created successfully!");
       await new Promise(resolve => setTimeout(resolve, 1000));
@@ -324,7 +370,6 @@ function App() {
       setMessages((prev) => [...prev, assistantMessage]);
       await loadTrackOverview();
 
-      // Success toast
       if (response.changes_table && response.changes_table.length > 0) {
         addToast("success", `Applied ${response.changes_table.length} changes successfully!`);
       }
@@ -343,12 +388,16 @@ function App() {
     }
   }
 
-  function handleClearApiConfig() {
-    localStorage.removeItem(CONFIG_STORAGE_KEY);
+  async function handleClearApiConfig() {
+    try {
+      await invoke("delete_api_config");
+    } catch {
+      // ignore
+    }
     setApiKey("");
     setApiKeySet(false);
     setCustomInstructions("");
-    addToast("info", "Saved API settings cleared");
+    addToast("info", "API settings cleared");
   }
 
   async function handleSavePreset() {
@@ -356,10 +405,31 @@ function App() {
     if (!presetName) return;
 
     try {
-      const path = await invoke<string>("save_preset", { name: presetName });
+      await invoke<string>("save_preset", { name: presetName });
       addToast("success", `Preset saved: ${presetName}`, 6000);
     } catch (error) {
       addToast("error", "Failed to save preset: " + error);
+    }
+  }
+
+  async function handleExportTone() {
+    const lastAssistantMsg = [...messages].reverse().find(m => m.role === "assistant" && m.changes_table?.length);
+    if (!lastAssistantMsg?.changes_table) {
+      addToast("warning", "No recent tone changes to export");
+      return;
+    }
+
+    try {
+      const text = await invoke<string>("export_tone_as_text", {
+        changes: lastAssistantMsg.changes_table,
+        summary: lastAssistantMsg.content,
+      });
+
+      // Copy to clipboard
+      await navigator.clipboard.writeText(text);
+      addToast("success", "Tone settings copied to clipboard!");
+    } catch (error) {
+      addToast("error", "Failed to export: " + error);
     }
   }
 
@@ -381,6 +451,16 @@ function App() {
     }
   }
 
+  function handleSelectRecentTone(query: string) {
+    setInput(query);
+    inputRef.current?.focus();
+  }
+
+  function handleUndoRedoAction(_action: "undo" | "redo", description: string) {
+    addToast("info", description, 3000);
+    loadTrackOverview();
+  }
+
   return (
     <div className="app-container">
       <Toast toasts={toasts} onDismiss={dismissToast} />
@@ -388,6 +468,7 @@ function App() {
         <div className="header-content">
           <h1>🎸 ToneForge</h1>
           <div className="header-actions">
+            <UndoRedo onAction={handleUndoRedoAction} />
             <div
               className={`status-pill ${reaperConnected ? "online" : "offline"}`}
             >
@@ -409,13 +490,25 @@ function App() {
                 EQ Match
               </button>
             </div>
-            <button
-              className="primary-btn"
-              onClick={handleSavePreset}
-              disabled={!reaperConnected}
-            >
-              Save Preset
-            </button>
+            <Tooltip content="Save current preset (Ctrl+S)" position="bottom">
+              <button
+                className="primary-btn"
+                onClick={handleSavePreset}
+                disabled={!reaperConnected}
+              >
+                Save Preset
+              </button>
+            </Tooltip>
+            <Tooltip content="Export last tone as text" position="bottom">
+              <button
+                className="ghost-btn"
+                onClick={handleExportTone}
+                disabled={!messages.some(m => m.changes_table?.length)}
+              >
+                Export
+              </button>
+            </Tooltip>
+            <ThemeToggle theme={theme} onToggle={toggleTheme} />
           </div>
         </div>
       </header>
@@ -436,7 +529,7 @@ function App() {
                     <div className="config-badges">
                       <span className="badge">{provider}</span>
                       <span className="badge">{model}</span>
-                      <span className="badge success">API saved locally</span>
+                      <span className="badge success">Encrypted</span>
                     </div>
                     <div className="custom-instructions">
                       <label htmlFor="custom-instructions">Custom instructions</label>
@@ -447,8 +540,9 @@ function App() {
                         onChange={(e) => setCustomInstructions(e.target.value)}
                         rows={4}
                       />
-                      <small>Applied to every AI request and saved with your API key.</small>
+                      <small>Applied to every AI request and saved securely.</small>
                     </div>
+                    <RecentTones onSelectTone={handleSelectRecentTone} />
                   </div>
 
                   <div className="sidebar-section">
@@ -458,7 +552,9 @@ function App() {
                         Refresh
                       </button>
                     </div>
-                    {tracks.length === 0 ? (
+                    {tracksLoading ? (
+                      <SkeletonChannels />
+                    ) : tracks.length === 0 ? (
                       <p className="empty-state">No channels detected</p>
                     ) : (
                       <div className="channel-grid">
@@ -500,37 +596,49 @@ function App() {
                         </span>
                       )}
                     </div>
-                    {currentTrack && currentTrackFx.length > 0 ? (
+                    {currentTrackFx.length > 3 && (
+                      <FxSearch onSearch={setFxSearchQuery} placeholder="Search plugins..." />
+                    )}
+                    {tracksLoading ? (
+                      <SkeletonFxList />
+                    ) : currentTrack && filteredFx.length > 0 ? (
                       <ul className="fx-list">
-                        {currentTrackFx.map((fx) => (
-                          <li
+                        {filteredFx.map((fx) => (
+                          <Tooltip
                             key={fx.index}
-                            className={`fx-item ${fx.enabled ? "enabled" : "disabled"}`}
+                            content={`${fx.name}\n${fx.enabled ? "Active" : "Bypassed"}`}
+                            position="right"
                           >
-                            <div className="fx-details">
-                              <span className="fx-name">
-                                {fx.index + 1}. {fx.name}
-                              </span>
-                              <span
-                                className={`fx-status ${fx.enabled ? "on" : "off"}`}
-                              >
-                                {fx.enabled ? "Active" : "Bypassed"}
-                              </span>
-                            </div>
-                            <button
-                              className="ghost-btn"
-                              onClick={() =>
-                                currentTrack &&
-                                handleToggleFx(currentTrack.index, fx.index, fx.enabled)
-                              }
+                            <li
+                              className={`fx-item ${fx.enabled ? "enabled" : "disabled"}`}
                             >
-                              {fx.enabled ? "Disable" : "Enable"}
-                            </button>
-                          </li>
+                              <div className="fx-details">
+                                <span className="fx-name">
+                                  {fx.index + 1}. {fx.name}
+                                </span>
+                                <span
+                                  className={`fx-status ${fx.enabled ? "on" : "off"}`}
+                                >
+                                  {fx.enabled ? "Active" : "Bypassed"}
+                                </span>
+                              </div>
+                              <button
+                                className="ghost-btn"
+                                onClick={() =>
+                                  currentTrack &&
+                                  handleToggleFx(currentTrack.index, fx.index, fx.enabled)
+                                }
+                              >
+                                {fx.enabled ? "Disable" : "Enable"}
+                              </button>
+                            </li>
+                          </Tooltip>
                         ))}
                       </ul>
                     ) : (
-                      <p className="empty-state">No plugins loaded</p>
+                      <p className="empty-state">
+                        {fxSearchQuery ? "No plugins match your search" : "No plugins loaded"}
+                      </p>
                     )}
                     <div className="fx-summary">
                       {activeFxCount} active FX on this channel
@@ -599,7 +707,7 @@ function App() {
                       onChange={(e) => setCustomInstructions(e.target.value)}
                       rows={3}
                     />
-                    <small>Saved locally with your API key and sent with every request.</small>
+                    <small>Saved securely with your API key and sent with every request.</small>
                   </div>
 
                   <div className="api-key-form">
@@ -612,7 +720,7 @@ function App() {
                         e.key === "Enter" && handleConfigureAssistant()
                       }
                     />
-                    <button onClick={handleConfigureAssistant}>Start</button>
+                    <button onClick={() => handleConfigureAssistant()}>Start</button>
                   </div>
 
                   <div className="help-text">
@@ -692,8 +800,9 @@ function App() {
 
               <div className="chat-input">
                 <input
+                  ref={inputRef}
                   type="text"
-                  placeholder={`Channel ${selectedTrack + 1}: Try "Metallica tone"`}
+                  placeholder={`Channel ${selectedTrack + 1}: Try "Metallica tone" (Ctrl+N to focus)`}
                   value={input}
                   onChange={(e) => setInput(e.target.value)}
                   onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
