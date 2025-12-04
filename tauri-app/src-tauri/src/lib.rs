@@ -42,6 +42,316 @@ struct RecentTone {
     changes_count: usize,
 }
 
+#[derive(Clone, Debug)]
+struct IntentResult {
+    label: String,
+    details: Vec<String>,
+    confidence: f32,
+}
+
+#[derive(Clone, Default)]
+struct ChainOfThought {
+    steps: Vec<String>,
+}
+
+impl ChainOfThought {
+    fn new() -> Self {
+        Self { steps: Vec::new() }
+    }
+
+    fn add_step<T: Into<String>>(&mut self, step: T) {
+        self.steps.push(step.into());
+    }
+
+    fn summarize(&self) -> String {
+        if self.steps.is_empty() {
+            return "No preliminary reasoning recorded.".to_string();
+        }
+        self
+            .steps
+            .iter()
+            .enumerate()
+            .map(|(idx, step)| format!("{}. {}", idx + 1, step))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+#[derive(Clone, Default)]
+struct MemorySystem {
+    entries: Vec<ChatMessage>,
+    max_entries: usize,
+    feedback: Vec<String>,
+}
+
+impl MemorySystem {
+    fn from_history(history: Vec<ChatMessage>, max_entries: usize) -> Self {
+        let mut entries = history;
+        if entries.len() > max_entries {
+            let overflow = entries.len() - max_entries;
+            entries.drain(0..overflow);
+        }
+        Self {
+            entries,
+            max_entries,
+            feedback: Vec::new(),
+        }
+    }
+
+    fn summarize(&self) -> String {
+        if self.entries.is_empty() {
+            return "No prior conversation available.".to_string();
+        }
+        let mut summary = Vec::new();
+        for entry in self.entries.iter().rev().take(5).rev() {
+            summary.push(format!("{}: {}", entry.role, entry.content));
+        }
+        if !self.feedback.is_empty() {
+            summary.push(format!(
+                "Feedback loop: {}",
+                self.feedback.join(" | ")
+            ));
+        }
+        summary.join("\n")
+    }
+
+    fn record_feedback<T: Into<String>>(&mut self, note: T) {
+        self.feedback.push(note.into());
+        if self.feedback.len() > 5 {
+            self.feedback.remove(0);
+        }
+    }
+}
+
+#[derive(Clone, Default)]
+struct LearningSystem {
+    preferences: HashMap<String, f64>,
+    feedback_log: Vec<String>,
+}
+
+impl LearningSystem {
+    fn ingest_feedback(&mut self, message: &str) {
+        let lowered = message.to_lowercase();
+        if lowered.contains("muddy") {
+            *self.preferences.entry("bass".into()).or_insert(0.5) -= 0.05;
+            self.feedback_log
+                .push("Detected 'muddy' feedback, biasing bass downward.".into());
+        }
+        if lowered.contains("harsh") || lowered.contains("bright") {
+            *self.preferences.entry("presence".into()).or_insert(0.5) -= 0.05;
+            self.feedback_log
+                .push("Detected harshness feedback, tempering presence.".into());
+        }
+    }
+
+    fn apply_memory(&mut self, memory: &MemorySystem) {
+        for entry in &memory.entries {
+            self.ingest_feedback(&entry.content);
+        }
+    }
+
+    fn summary(&self) -> String {
+        if self.preferences.is_empty() && self.feedback_log.is_empty() {
+            return "No learned preferences yet.".into();
+        }
+
+        let mut lines = Vec::new();
+        if !self.preferences.is_empty() {
+            lines.push("Learned parameter biases:".into());
+            for (key, value) in &self.preferences {
+                lines.push(format!("- {} → {:.2}", key, value));
+            }
+        }
+
+        if !self.feedback_log.is_empty() {
+            lines.push("Recent feedback notes:".into());
+            lines.extend(self.feedback_log.iter().cloned());
+        }
+
+        lines.join("\n")
+    }
+}
+
+#[derive(Clone, Default)]
+struct IntentDetector;
+
+impl IntentDetector {
+    fn detect(message: &str) -> IntentResult {
+        let mut details = Vec::new();
+        let mut confidence = 0.45;
+        let lower = message.to_lowercase();
+
+        if lower.contains("tone") || lower.contains("sound") {
+            details.push("Tone shaping request detected.".into());
+            confidence += 0.25;
+        }
+        if lower.contains("too bright") || lower.contains("too harsh") {
+            details.push("User complains about brightness/harshness.".into());
+            confidence += 0.15;
+        }
+        if lower.contains("muddy") || lower.contains("boomy") {
+            details.push("User complains about muddiness.".into());
+            confidence += 0.2;
+        }
+        if lower.contains("metallica") || lower.contains("master of puppets") {
+            details.push("Specific artist/album tone requested.".into());
+            confidence += 0.25;
+        }
+
+        IntentResult {
+            label: "ToneEngineering".into(),
+            details,
+            confidence: confidence.min(0.99),
+        }
+    }
+}
+
+#[derive(Default)]
+struct SelfCritique {
+    reflections: Vec<String>,
+}
+
+impl SelfCritique {
+    fn evaluate(plan: &AIPlan, diagnostics: &EngineDiagnostics) -> Option<Self> {
+        let mut reflections = Vec::new();
+        if plan.actions.is_empty() {
+            reflections.push("Plan contained no actions; ensure this is intentional.".into());
+        }
+        if !diagnostics.safety_warnings.is_empty() {
+            reflections.push("Safety warnings present; consider gentler parameter moves.".into());
+        }
+        if plan.changes_table.is_empty() {
+            reflections.push("No user-visible changes reported; double-check summary.".into());
+        }
+
+        if reflections.is_empty() {
+            return None;
+        }
+
+        Some(Self { reflections })
+    }
+
+    fn summarize(&self) -> String {
+        self.reflections
+            .iter()
+            .map(|note| format!("- {}", note))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+}
+
+#[derive(Clone)]
+struct PromptPackage {
+    system_prompt: String,
+    user_prompt: String,
+}
+
+#[derive(Clone)]
+struct PromptBuilder {
+    base_system_prompt: String,
+    dynamic_rules: Vec<String>,
+    memory_summary: Option<String>,
+    learning_summary: Option<String>,
+    intent: Option<IntentResult>,
+    chain_of_thought: Option<ChainOfThought>,
+}
+
+impl PromptBuilder {
+    fn new(base: &str) -> Self {
+        Self {
+            base_system_prompt: base.to_string(),
+            dynamic_rules: Vec::new(),
+            memory_summary: None,
+            learning_summary: None,
+            intent: None,
+            chain_of_thought: None,
+        }
+    }
+
+    fn with_rule<T: Into<String>>(mut self, rule: T) -> Self {
+        self.dynamic_rules.push(rule.into());
+        self
+    }
+
+    fn with_memory<T: Into<String>>(mut self, summary: T) -> Self {
+        self.memory_summary = Some(summary.into());
+        self
+    }
+
+    fn with_learning<T: Into<String>>(mut self, summary: T) -> Self {
+        self.learning_summary = Some(summary.into());
+        self
+    }
+
+    fn with_intent(mut self, intent: IntentResult) -> Self {
+        self.intent = Some(intent);
+        self
+    }
+
+    fn with_chain(mut self, chain: ChainOfThought) -> Self {
+        self.chain_of_thought = Some(chain);
+        self
+    }
+
+    fn build(&self, payload: &PromptPayload) -> Result<PromptPackage, String> {
+        let context = serde_json::to_string_pretty(payload).map_err(|e| e.to_string())?;
+
+        let mut system_sections = vec![self.base_system_prompt.clone()];
+        if !self.dynamic_rules.is_empty() {
+            system_sections.push(format!("Dynamic rules:\n{}", self.dynamic_rules.join("\n")));
+        }
+
+        let mut user_sections = Vec::new();
+        user_sections.push(format!(
+            "ACTIVE TARGET TRACK: {} (override by setting 'track' explicitly if needed)",
+            payload.selected_track
+        ));
+
+        if let Some(ref intent) = self.intent {
+            user_sections.push(format!(
+                "Detected intent [{} | confidence {:.0}%]:\n{}",
+                intent.label,
+                intent.confidence * 100.0,
+                if intent.details.is_empty() {
+                    "No details".into()
+                } else {
+                    intent.details.join(" | ")
+                }
+            ));
+        }
+
+        if let Some(ref memory) = self.memory_summary {
+            user_sections.push(format!("Conversation memory:\n{}", memory));
+        }
+
+        if let Some(ref learning) = self.learning_summary {
+            user_sections.push(format!("Learned preferences:\n{}", learning));
+        }
+
+        if let Some(ref chain) = self.chain_of_thought {
+            user_sections.push(format!("Preliminary reasoning:\n{}", chain.summarize()));
+        }
+
+        if let Some(ref instructions) = payload.custom_instructions {
+            let trimmed = instructions.trim();
+            if !trimmed.is_empty() {
+                user_sections.push(format!("CUSTOM INSTRUCTIONS FROM USER:\n{}", trimmed));
+            }
+        }
+
+        if let Some(ref research) = payload.research_context {
+            user_sections.push(research.clone());
+        }
+
+        user_sections.push(format!("=== SNAPSHOT START ===\n{}\n=== SNAPSHOT END ===", context));
+
+        Ok(PromptPackage {
+            system_prompt: system_sections.join("\n\n"),
+            user_prompt: user_sections.join("\n\n"),
+        })
+    }
+}
+
 // Helper to handle mutex poisoning gracefully
 fn lock_or_recover<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<T> {
     mutex.lock().unwrap_or_else(|poisoned| {
@@ -161,6 +471,17 @@ impl AIProvider {
             AIProvider::Gemini(client) => client.generate(prompt).await,
         }
     }
+
+    async fn generate_chat(
+        &self,
+        system_prompt: &str,
+        history: &[ConversationEntry],
+        user_prompt: &str,
+    ) -> Result<String, Box<dyn Error>> {
+        match self {
+            AIProvider::Gemini(client) => client.generate_chat(system_prompt, history, user_prompt).await,
+        }
+    }
 }
 
 struct AppState {
@@ -171,6 +492,7 @@ struct AppState {
     tone_researcher: ToneResearcher, // First AI layer for internet research
     undo_manager: Mutex<UndoManager>, // Undo/Redo system
     recent_tones: Mutex<Vec<RecentTone>>, // Recent tone history
+    learning_system: Mutex<LearningSystem>, // Persistent learning preferences
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -238,8 +560,8 @@ struct PromptPayload {
     custom_instructions: Option<String>,
 }
 
-#[derive(Serialize)]
-struct ConversationEntry {
+#[derive(Serialize, Clone)]
+pub struct ConversationEntry {
     role: String,
     content: String,
 }
@@ -466,35 +788,6 @@ async fn collect_track_snapshots(reaper: &ReaperClient) -> Result<Vec<TrackSnaps
         });
     }
     Ok(tracks)
-}
-
-fn build_prompt(payload: &PromptPayload) -> Result<String, String> {
-    let context = serde_json::to_string_pretty(payload).map_err(|e| e.to_string())?;
-    let track_hint = format!(
-        "ACTIVE TARGET TRACK: {} (override by setting 'track' explicitly if you need another track)",
-        payload.selected_track
-    );
-
-    let mut context_sections = vec![track_hint];
-
-    // Add optional user instructions to steer the AI
-    if let Some(ref instructions) = payload.custom_instructions {
-        let trimmed = instructions.trim();
-        if !trimmed.is_empty() {
-            context_sections.push(format!("CUSTOM INSTRUCTIONS FROM USER:\n{}", trimmed));
-        }
-    }
-
-    // Add research context if available (from first AI layer)
-    if let Some(ref research) = payload.research_context {
-        context_sections.push(research.clone());
-    }
-
-    Ok(format!(
-        "{SYSTEM_PROMPT}\n\n{}\n\n=== SNAPSHOT START ===\n{}\n=== SNAPSHOT END ===",
-        context_sections.join("\n\n"),
-        context
-    ))
 }
 
 fn extract_json_block(text: &str) -> String {
@@ -995,6 +1288,33 @@ async fn process_chat_message(
         conversation_for_prompt(&history)
     };
 
+    let full_history = {
+        let history = lock_or_recover(&state.chat_history);
+        history.clone()
+    };
+
+    let mut memory_system = MemorySystem::from_history(full_history, MAX_HISTORY);
+    let intent = IntentDetector::detect(&message);
+    let mut chain_of_thought = ChainOfThought::new();
+    let intent_details = if intent.details.is_empty() {
+        "No details".to_string()
+    } else {
+        intent.details.join(" | ")
+    };
+    chain_of_thought.add_step(format!(
+        "Intent [{} | {:.0}%]: {}",
+        intent.label,
+        intent.confidence * 100.0,
+        intent_details
+    ));
+
+    {
+        let mut learning = lock_or_recover(&state.learning_system);
+        learning.apply_memory(&memory_system);
+        learning.ingest_feedback(&message);
+        memory_system.record_feedback(learning.summary());
+    }
+
     // ========== TONE RESEARCH LAYER (First AI Layer) ==========
     // Detect if user is requesting a specific tone and research it from the internet
     let research_context =
@@ -1019,6 +1339,10 @@ async fn process_chat_message(
             None
         };
 
+    if research_context.is_some() {
+        chain_of_thought.add_step("Research context detected and attached.".to_string());
+    }
+
     let payload = PromptPayload {
         selected_track: track_idx,
         tracks: tracks_snapshot.clone(),
@@ -1027,9 +1351,26 @@ async fn process_chat_message(
         custom_instructions,
     };
 
-    let prompt = build_prompt(&payload)?;
+    let learning_snapshot = {
+        let learning = lock_or_recover(&state.learning_system);
+        learning.summary()
+    };
+
+    let prompt_builder = PromptBuilder::new(SYSTEM_PROMPT)
+        .with_rule("Always execute hierarchical validation before modifications.")
+        .with_memory(memory_system.summarize())
+        .with_learning(learning_snapshot)
+        .with_intent(intent)
+        .with_chain(chain_of_thought);
+
+    let prompt_package = prompt_builder.build(&payload)?;
+
     let ai_text = ai_provider
-        .generate(&prompt)
+        .generate_chat(
+            &prompt_package.system_prompt,
+            &payload.recent_messages,
+            &prompt_package.user_prompt,
+        )
         .await
         .map_err(|e| e.to_string())?;
     let mut plan = parse_plan(&ai_text)?;
@@ -1265,6 +1606,8 @@ async fn process_chat_message(
         plan.summary = format!("{}\n\n[AI Engine Report]\n{}", plan.summary, report);
     }
 
+    let self_critique = SelfCritique::evaluate(&plan, &diagnostics);
+
     // ========== UNDO SYSTEM: Begin recording changes ==========
     {
         let mut undo_manager = lock_or_recover(&state.undo_manager);
@@ -1325,6 +1668,11 @@ async fn process_chat_message(
         println!("[AI ACTION] {}", log);
     }
 
+    let mut enriched_action_logs = action_logs.clone();
+    if let Some(critique) = self_critique {
+        enriched_action_logs.push(format!("Self-critique:\n{}", critique.summarize()));
+    }
+
     // ========== UNDO SYSTEM: Commit the action ==========
     {
         let mut undo_manager = lock_or_recover(&state.undo_manager);
@@ -1343,6 +1691,16 @@ async fn process_chat_message(
     );
 
     {
+        let mut learning = lock_or_recover(&state.learning_system);
+        learning
+            .feedback_log
+            .push(format!("Executed plan with {} actions", plan.actions.len()));
+        if learning.feedback_log.len() > 10 {
+            learning.feedback_log.remove(0);
+        }
+    }
+
+    {
         let mut history = lock_or_recover(&state.chat_history);
         push_history(
             &mut history,
@@ -1358,7 +1716,7 @@ async fn process_chat_message(
         summary: plan.summary,
         changes_table: plan.changes_table,
         engine_report,
-        action_log: action_logs,
+        action_log: enriched_action_logs,
     };
 
     serde_json::to_string(&response).map_err(|e| e.to_string())
@@ -1766,6 +2124,7 @@ pub fn run() {
             tone_researcher: ToneResearcher::new(), // First AI layer for tone research
             undo_manager: Mutex::new(UndoManager::new()), // Undo/Redo system
             recent_tones: Mutex::new(Vec::new()), // Recent tones history
+            learning_system: Mutex::new(LearningSystem::default()),
         })
         .invoke_handler(tauri::generate_handler![
             check_reaper_connection,
