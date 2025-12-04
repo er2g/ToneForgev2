@@ -1,0 +1,97 @@
+.tooltip-wrapper {
+  position: relative;
+  display: inline-flex;
+}
+
+.tooltip {
+  position: absolute;
+  z-index: 1000;
+  padding: 0.5rem 0.75rem;
+  background: var(--tooltip-bg, #1a1a1a);
+  color: var(--tooltip-text, #fff);
+  font-size: 0.8rem;
+  line-height: 1.4;
+  border-radius: 6px;
+  white-space: pre-line;
+  max-width: 250px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  animation: tooltip-fade-in 0.15s ease;
+  pointer-events: none;
+}
+
+@keyframes tooltip-fade-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.tooltip-arrow {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: var(--tooltip-bg, #1a1a1a);
+  transform: rotate(45deg);
+}
+
+/* Position: top */
+.tooltip-top {
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.tooltip-top .tooltip-arrow {
+  bottom: -4px;
+  left: 50%;
+  margin-left: -4px;
+}
+
+/* Position: bottom */
+.tooltip-bottom {
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.tooltip-bottom .tooltip-arrow {
+  top: -4px;
+  left: 50%;
+  margin-left: -4px;
+}
+
+/* Position: left */
+.tooltip-left {
+  right: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.tooltip-left .tooltip-arrow {
+  right: -4px;
+  top: 50%;
+  margin-top: -4px;
+}
+
+/* Position: right */
+.tooltip-right {
+  left: calc(100% + 8px);
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.tooltip-right .tooltip-arrow {
+  left: -4px;
+  top: 50%;
+  margin-top: -4px;
+}
+
+/* Light theme */
+[data-theme="light"] .tooltip {
+  --tooltip-bg: #333;
+  --tooltip-text: #fff;
+}

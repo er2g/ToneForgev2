@@ -2,14 +2,18 @@ mod ai_engine;
 mod ai_engine_tests;
 mod audio;
 mod dsp;
+mod errors;
 mod gemini_client;
 mod reaper_client;
+mod secure_storage;
 mod tone_researcher;
+mod undo_redo;
 
 use audio::analyzer::{analyze_spectrum, AnalysisConfig};
 use audio::loader::{load_audio_file, resample_audio};
 use audio::matcher::{match_profiles, MatchConfig as EqMatchConfig, MatchResult as EqMatchResult};
 use audio::profile::{extract_eq_profile, EQProfile};
+use errors::{ErrorResponse, ToneForgeError};
 use gemini_client::GeminiClient;
 use reaper_client::ReaperClient;
 use serde::{Deserialize, Serialize};
@@ -21,9 +25,22 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
 use tone_researcher::ToneResearcher;
+use undo_redo::{UndoAction, UndoActionSummary, UndoManager, UndoState};
 
 const MAX_HISTORY: usize = 40;
 const PROMPT_HISTORY_LIMIT: usize = 12;
+const MAX_RECENT_TONES: usize = 20;
+
+/// Recent tone entry for quick access
+#[derive(Clone, Serialize, Deserialize)]
+struct RecentTone {
+    id: String,
+    query: String,
+    summary: String,
+    timestamp: u64,
+    track: i32,
+    changes_count: usize,
+}
 
 // Helper to handle mutex poisoning gracefully
 fn lock_or_recover<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<T> {
@@ -152,6 +169,8 @@ struct AppState {
     chat_history: Mutex<Vec<ChatMessage>>,
     http_client: reqwest::Client, // Reusable HTTP client (no mutex needed - Clone is cheap)
     tone_researcher: ToneResearcher, // First AI layer for internet research
+    undo_manager: Mutex<UndoManager>, // Undo/Redo system
+    recent_tones: Mutex<Vec<RecentTone>>, // Recent tone history
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -1246,11 +1265,82 @@ async fn process_chat_message(
         plan.summary = format!("{}\n\n[AI Engine Report]\n{}", plan.summary, report);
     }
 
+    // ========== UNDO SYSTEM: Begin recording changes ==========
+    {
+        let mut undo_manager = lock_or_recover(&state.undo_manager);
+        undo_manager.begin_action(&format!("AI: {}", message.chars().take(50).collect::<String>()));
+    }
+
+    // Record changes for undo before applying
+    for action in &plan.actions {
+        match action {
+            PlannedAction::SetParam {
+                track,
+                fx_index,
+                param_index,
+                value,
+                ..
+            } => {
+                if let Some(track_state) = find_track(&tracks_snapshot, *track) {
+                    if let Some(fx_state) = find_fx(track_state, *fx_index) {
+                        if let Some(param_state) = find_param(fx_state, *param_index) {
+                            let mut undo_manager = lock_or_recover(&state.undo_manager);
+                            undo_manager.record_param_change(
+                                *track,
+                                *fx_index,
+                                *param_index,
+                                &param_state.name,
+                                param_state.value,
+                                *value,
+                            );
+                        }
+                    }
+                }
+            }
+            PlannedAction::ToggleFx {
+                track,
+                fx_index,
+                enabled,
+                ..
+            } => {
+                if let Some(track_state) = find_track(&tracks_snapshot, *track) {
+                    if let Some(fx_state) = find_fx(track_state, *fx_index) {
+                        let mut undo_manager = lock_or_recover(&state.undo_manager);
+                        undo_manager.record_fx_toggle(
+                            *track,
+                            *fx_index,
+                            &fx_state.name,
+                            fx_state.enabled,
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     let http_client = &state.http_client; // Clone is cheap for reqwest::Client
     let action_logs = apply_actions(&reaper, http_client, &tracks_snapshot, &plan.actions).await?;
     for log in &action_logs {
         println!("[AI ACTION] {}", log);
     }
+
+    // ========== UNDO SYSTEM: Commit the action ==========
+    {
+        let mut undo_manager = lock_or_recover(&state.undo_manager);
+        if let Some(action_id) = undo_manager.commit_action() {
+            println!("[UNDO] Recorded action: {}", action_id);
+        }
+    }
+
+    // ========== RECENT TONES: Add to history ==========
+    add_recent_tone(
+        &state,
+        &message,
+        &plan.summary,
+        track_idx,
+        plan.changes_table.len(),
+    );
 
     {
         let mut history = lock_or_recover(&state.chat_history);
@@ -1437,6 +1527,232 @@ async fn load_preset(path: String, state: State<'_, AppState>) -> Result<String,
     Ok(format!("Preset loaded from {}", path))
 }
 
+// ==================== UNDO/REDO COMMANDS ====================
+
+#[tauri::command]
+fn get_undo_state(state: State<'_, AppState>) -> Result<String, String> {
+    let manager = lock_or_recover(&state.undo_manager);
+    let undo_state = UndoState::from(&*manager);
+    serde_json::to_string(&undo_state).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn perform_undo(state: State<'_, AppState>) -> Result<String, String> {
+    let action = {
+        let mut manager = lock_or_recover(&state.undo_manager);
+        manager.pop_undo()
+    };
+
+    let Some(action) = action else {
+        return Err("Nothing to undo".to_string());
+    };
+
+    let reaper = { lock_or_recover(&state.reaper).clone() };
+
+    // Apply inverse of each change
+    for change in &action.parameter_changes {
+        if let Err(e) = reaper
+            .set_param(change.track, change.fx_index, &change.param_name, change.old_value)
+            .await
+        {
+            eprintln!("[UNDO] Failed to revert param: {}", e);
+        }
+    }
+
+    for toggle in &action.fx_toggles {
+        if let Err(e) = reaper
+            .set_fx_enabled(toggle.track, toggle.fx_index, toggle.was_enabled)
+            .await
+        {
+            eprintln!("[UNDO] Failed to revert toggle: {}", e);
+        }
+    }
+
+    // For plugin changes, we'd need to add/remove plugins
+    // This is more complex and may require REAPER extension support
+
+    // Move action to redo stack
+    {
+        let mut manager = lock_or_recover(&state.undo_manager);
+        manager.push_redo(action.clone());
+    }
+
+    Ok(format!("Undone: {}", action.description))
+}
+
+#[tauri::command]
+async fn perform_redo(state: State<'_, AppState>) -> Result<String, String> {
+    let action = {
+        let mut manager = lock_or_recover(&state.undo_manager);
+        manager.pop_redo()
+    };
+
+    let Some(action) = action else {
+        return Err("Nothing to redo".to_string());
+    };
+
+    let reaper = { lock_or_recover(&state.reaper).clone() };
+
+    // Re-apply each change
+    for change in &action.parameter_changes {
+        if let Err(e) = reaper
+            .set_param(change.track, change.fx_index, &change.param_name, change.new_value)
+            .await
+        {
+            eprintln!("[REDO] Failed to reapply param: {}", e);
+        }
+    }
+
+    for toggle in &action.fx_toggles {
+        if let Err(e) = reaper
+            .set_fx_enabled(toggle.track, toggle.fx_index, !toggle.was_enabled)
+            .await
+        {
+            eprintln!("[REDO] Failed to reapply toggle: {}", e);
+        }
+    }
+
+    // Move action back to undo stack
+    {
+        let mut manager = lock_or_recover(&state.undo_manager);
+        manager.push_undo(action.clone());
+    }
+
+    Ok(format!("Redone: {}", action.description))
+}
+
+#[tauri::command]
+fn get_undo_history(state: State<'_, AppState>, limit: Option<usize>) -> Result<String, String> {
+    let manager = lock_or_recover(&state.undo_manager);
+    let history = manager.get_undo_history(limit.unwrap_or(10));
+    serde_json::to_string(&history).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn clear_undo_history(state: State<'_, AppState>) -> Result<(), String> {
+    let mut manager = lock_or_recover(&state.undo_manager);
+    manager.clear();
+    Ok(())
+}
+
+// ==================== RECENT TONES COMMANDS ====================
+
+#[tauri::command]
+fn get_recent_tones(state: State<'_, AppState>) -> Result<String, String> {
+    let recent = lock_or_recover(&state.recent_tones);
+    serde_json::to_string(&*recent).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn clear_recent_tones(state: State<'_, AppState>) -> Result<(), String> {
+    let mut recent = lock_or_recover(&state.recent_tones);
+    recent.clear();
+    Ok(())
+}
+
+fn add_recent_tone(state: &AppState, query: &str, summary: &str, track: i32, changes_count: usize) {
+    let mut recent = lock_or_recover(&state.recent_tones);
+
+    let tone = RecentTone {
+        id: uuid::Uuid::new_v4().to_string(),
+        query: query.to_string(),
+        summary: summary.to_string(),
+        timestamp: current_timestamp(),
+        track,
+        changes_count,
+    };
+
+    // Add to front
+    recent.insert(0, tone);
+
+    // Keep only MAX_RECENT_TONES
+    recent.truncate(MAX_RECENT_TONES);
+}
+
+// ==================== EXPORT COMMANDS ====================
+
+#[tauri::command]
+fn export_tone_as_text(
+    changes: Vec<ChangeEntry>,
+    summary: String,
+) -> Result<String, String> {
+    let mut output = String::new();
+
+    output.push_str("═══════════════════════════════════════\n");
+    output.push_str("        TONEFORGE - TONE EXPORT\n");
+    output.push_str("═══════════════════════════════════════\n\n");
+
+    output.push_str(&format!("Summary: {}\n\n", summary));
+
+    output.push_str("Changes Applied:\n");
+    output.push_str("───────────────────────────────────────\n");
+
+    for (i, change) in changes.iter().enumerate() {
+        output.push_str(&format!(
+            "{}. {} - {}\n   {} → {}\n   Reason: {}\n\n",
+            i + 1,
+            change.plugin,
+            change.parameter,
+            change.old_value,
+            change.new_value,
+            change.reason
+        ));
+    }
+
+    output.push_str("───────────────────────────────────────\n");
+    output.push_str(&format!("Total Changes: {}\n", changes.len()));
+    output.push_str(&format!("Exported: {}\n", chrono_lite_now()));
+    output.push_str("Generated by ToneForge\n");
+
+    Ok(output)
+}
+
+fn chrono_lite_now() -> String {
+    let secs = current_timestamp();
+    // Simple timestamp formatting without chrono dependency
+    format!("Unix timestamp: {}", secs)
+}
+
+// ==================== SECURE STORAGE COMMANDS ====================
+
+#[tauri::command]
+fn save_api_config(
+    api_key: String,
+    provider: String,
+    model: String,
+    custom_instructions: Option<String>,
+) -> Result<(), String> {
+    let config = secure_storage::SecureConfig {
+        api_key: Some(api_key),
+        provider: Some(provider),
+        model: Some(model),
+        custom_instructions,
+    };
+
+    secure_storage::save_config(&config)
+}
+
+#[tauri::command]
+fn load_api_config() -> Result<String, String> {
+    let config = secure_storage::load_config()?;
+    serde_json::to_string(&config).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_api_config() -> Result<(), String> {
+    secure_storage::delete_config()
+}
+
+#[tauri::command]
+fn has_saved_api_config() -> bool {
+    secure_storage::config_exists()
+}
+
+#[tauri::command]
+fn mask_api_key(key: String) -> String {
+    secure_storage::mask_api_key(&key)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1448,6 +1764,8 @@ pub fn run() {
             chat_history: Mutex::new(Vec::new()),
             http_client: reqwest::Client::new(), // Shared HTTP client
             tone_researcher: ToneResearcher::new(), // First AI layer for tone research
+            undo_manager: Mutex::new(UndoManager::new()), // Undo/Redo system
+            recent_tones: Mutex::new(Vec::new()), // Recent tones history
         })
         .invoke_handler(tauri::generate_handler![
             check_reaper_connection,
@@ -1462,6 +1780,23 @@ pub fn run() {
             load_input_audio,
             calculate_eq_match,
             export_eq_settings,
+            // Undo/Redo commands
+            get_undo_state,
+            perform_undo,
+            perform_redo,
+            get_undo_history,
+            clear_undo_history,
+            // Recent tones commands
+            get_recent_tones,
+            clear_recent_tones,
+            // Export commands
+            export_tone_as_text,
+            // Secure storage commands
+            save_api_config,
+            load_api_config,
+            delete_api_config,
+            has_saved_api_config,
+            mask_api_key,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
