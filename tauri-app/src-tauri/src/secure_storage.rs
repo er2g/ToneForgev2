@@ -178,8 +178,8 @@ mod tests {
     fn test_config_serialization() {
         let config = SecureConfig {
             api_key: Some("test-api-key-123".to_string()),
-            provider: Some("gemini".to_string()),
-            model: Some("gemini-2.0-flash".to_string()),
+            provider: Some("xai".to_string()),
+            model: Some("grok-2-latest".to_string()),
             custom_instructions: None,
         };
 

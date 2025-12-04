@@ -16,14 +16,21 @@ import { ChatResponse, ChangeEntry, SecureConfig } from "./types";
 import "./App.css";
 
 const PROVIDERS = [
-  { key: "gemini", label: "Google Gemini" },
+  { key: "xai", label: "xAI Grok" },
 ] as const;
 
 type ProviderKey = (typeof PROVIDERS)[number]["key"];
 
 const MODEL_PRESETS: Record<ProviderKey, string[]> = {
-  gemini: ["gemini-2.0-flash", "gemini-2.0-pro-exp", "gemini-1.5-pro"],
+  xai: ["grok-2-latest", "grok-2-vision", "grok-beta"],
 };
+
+const DEFAULT_PROVIDER: ProviderKey = "xai";
+const DEFAULT_MODEL = MODEL_PRESETS[DEFAULT_PROVIDER][0];
+
+function isProviderKey(value: string): value is ProviderKey {
+  return PROVIDERS.some((provider) => provider.key === value);
+}
 
 interface Message {
   role: "user" | "assistant";
@@ -68,8 +75,8 @@ function App() {
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [tracks, setTracks] = useState<TrackInfo[]>([]);
   const [selectedTrack, setSelectedTrack] = useState(0);
-  const [provider, setProvider] = useState<ProviderKey>("gemini");
-  const [model, setModel] = useState(MODEL_PRESETS.gemini[0]);
+  const [provider, setProvider] = useState<ProviderKey>(DEFAULT_PROVIDER);
+  const [model, setModel] = useState(DEFAULT_MODEL);
   const [activeView, setActiveView] = useState<"assistant" | "eq">("assistant");
   const [autoConfigAttempted, setAutoConfigAttempted] = useState(false);
   const [fxSearchQuery, setFxSearchQuery] = useState("");
@@ -112,8 +119,16 @@ function App() {
         const config: SecureConfig = JSON.parse(result);
 
         if (config.api_key) setApiKey(config.api_key);
-        if (config.provider) setProvider(config.provider as ProviderKey);
-        if (config.model) setModel(config.model);
+        if (config.provider && isProviderKey(config.provider)) {
+          setProvider(config.provider);
+        } else {
+          setProvider(DEFAULT_PROVIDER);
+        }
+        if (config.model) {
+          setModel(config.model);
+        } else {
+          setModel(MODEL_PRESETS[DEFAULT_PROVIDER][0]);
+        }
         if (config.custom_instructions) setCustomInstructions(config.custom_instructions);
       } catch {
         // No saved config, that's fine
@@ -687,7 +702,7 @@ function App() {
                     <input
                       id="model"
                       list="model-options"
-                      placeholder="gemini-2.0-flash"
+                      placeholder="grok-2-latest"
                       value={model}
                       onChange={(e) => setModel(e.target.value)}
                     />
@@ -727,7 +742,7 @@ function App() {
                     <small>
                       Don't have an API key?{" "}
                       <a
-                        href="https://aistudio.google.com/app/apikey"
+                        href="https://console.x.ai/"
                         target="_blank"
                         rel="noreferrer"
                       >
