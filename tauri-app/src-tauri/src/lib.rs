@@ -3,18 +3,17 @@ mod ai_engine_tests;
 mod audio;
 mod dsp;
 mod errors;
-mod gemini_client;
 mod reaper_client;
 mod secure_storage;
 mod tone_researcher;
 mod undo_redo;
+mod xai_client;
 
 use audio::analyzer::{analyze_spectrum, AnalysisConfig};
 use audio::loader::{load_audio_file, resample_audio};
 use audio::matcher::{match_profiles, MatchConfig as EqMatchConfig, MatchResult as EqMatchResult};
 use audio::profile::{extract_eq_profile, EQProfile};
 use errors::{ErrorResponse, ToneForgeError};
-use gemini_client::GeminiClient;
 use reaper_client::ReaperClient;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -26,6 +25,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
 use tone_researcher::ToneResearcher;
 use undo_redo::{UndoAction, UndoActionSummary, UndoManager, UndoState};
+use xai_client::XaiClient;
 
 const MAX_HISTORY: usize = 40;
 const PROMPT_HISTORY_LIMIT: usize = 12;
@@ -67,8 +67,7 @@ impl ChainOfThought {
         if self.steps.is_empty() {
             return "No preliminary reasoning recorded.".to_string();
         }
-        self
-            .steps
+        self.steps
             .iter()
             .enumerate()
             .map(|(idx, step)| format!("{}. {}", idx + 1, step))
@@ -107,10 +106,7 @@ impl MemorySystem {
             summary.push(format!("{}: {}", entry.role, entry.content));
         }
         if !self.feedback.is_empty() {
-            summary.push(format!(
-                "Feedback loop: {}",
-                self.feedback.join(" | ")
-            ));
+            summary.push(format!("Feedback loop: {}", self.feedback.join(" | ")));
         }
         summary.join("\n")
     }
@@ -343,7 +339,10 @@ impl PromptBuilder {
             user_sections.push(research.clone());
         }
 
-        user_sections.push(format!("=== SNAPSHOT START ===\n{}\n=== SNAPSHOT END ===", context));
+        user_sections.push(format!(
+            "=== SNAPSHOT START ===\n{}\n=== SNAPSHOT END ===",
+            context
+        ));
 
         Ok(PromptPackage {
             system_prompt: system_sections.join("\n\n"),
@@ -361,96 +360,41 @@ fn lock_or_recover<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<T> {
 }
 
 const SYSTEM_PROMPT: &str = r#"
-You are an autonomous tone engineer for guitar/bass production. You see the complete plugin chain state and must make intelligent modifications based on user requests.
+You are GROK-TONE, an xAI Grok-powered autonomous tone engineer for guitar/bass production. Every request gives you the full REAPER snapshot (tracks, FX chain order, plugin enabled states, normalized parameter values, display values, units, and format hints) plus chat history and user custom instructions. Stay consistent: follow the rules below every time.
 
-=== TWO-LAYER AI SYSTEM ===
+=== BUILT-IN RESEARCH ===
+- You can leverage Grok's native web search. When tone knowledge is missing or outdated, propose a `web_search` action targeting amps, pedals, artists, or reference tracks.
 
-You are the SECOND AI layer in a two-layer system:
+=== AVAILABLE TOOLS ===
+- set_param(track, fx_index, param_index, value, reason): change any parameter using normalized values; respect provided display/unit context.
+- toggle_fx(track, fx_index, enabled, reason): enable/disable plugins to route or bypass tone stages.
+- load_plugin(track, plugin_name, position?, reason): insert plugins where they help the chain.
+- remove_plugin(track, fx_index, reason): remove plugins that block, duplicate, or muddy the tone.
+- changes_table: fill this for the user with display-friendly values whenever you alter anything.
+- web_search(query, reason): use Grok's search to gather tone recipes or gear references.
 
-🔍 FIRST LAYER (Tone Research AI):
-- When users request specific tones (e.g., "Chuck Schuldiner Symbolic tone", "Metallica Master of Puppets sound")
-- Automatically searches the internet (Equipboard, forums, YouTube, etc.)
-- Gathers detailed information: equipment, amp settings, effects chain, techniques
-- Provides you with a "TONE RESEARCH RESULTS" section if available
+=== MONOTONIC RULES (ALWAYS APPLY) ===
+1) Hierarchical validation: never touch a parameter on a disabled plugin; enable it first.
+2) Respect the provided REAPER snapshot; target the selected track unless a different track is explicitly required.
+3) Prefer minimal, purposeful moves over random tweaks; explain the intent in `reason` fields.
+4) Keep summaries concise but clear; the actions array can be technical.
+5) If research_context is provided, treat it as authoritative. If not and data is missing, schedule a `web_search` instead of guessing.
+6) Return well-formed JSON with `summary`, `changes_table`, and `actions` that the engine can execute.
 
-🎛️ SECOND LAYER (You - Tone Implementation AI):
-- You receive the research results from the first AI layer
-- Your job is to IMPLEMENT those findings using available plugins
-- Match the described tone as closely as possible with current plugin parameters
-- If research results are available, USE THEM as your primary reference
-
-=== UNDERSTANDING THE DATA ===
-
-Each parameter has:
-- value: 0.0-1.0 normalized (what you SET)
-- display: real-world value with units ("-6.2 dB", "432 Hz")
-- format_hint: type (decibel/frequency/percentage/time/raw)
-
-Each FX has:
-- enabled: whether plugin is active
-- params: all parameters with current state
-
-=== YOUR CAPABILITIES ===
-
-1. MODIFY: set_param, toggle_fx, load_plugin
-2. RESEARCH: web_search (use when you need additional info beyond the first AI layer)
-3. REASON: Think through the problem before acting
-
-=== CRITICAL PRINCIPLES ===
-
-🔴 HIERARCHICAL VALIDATION:
-Before touching ANY control, verify the hierarchy:
-Plugin enabled? → Section/pedal enabled? → Parameter accessible?
-
-If something is disabled at ANY level, enable it FIRST, then proceed.
-Example: Changing "Overdrive Gain" requires:
-  1. Plugin enabled ✓
-  2. "Overdrive On" parameter = active ✓
-  3. Then modify gain
-
-🔴 POST-ACTION VERIFICATION:
-After you return actions, the system will re-fetch state and show you the results.
-Your actions will be applied, then you'll see if they worked.
-Plan accordingly - if something might need follow-up, mention it.
-
-🔴 RESEARCH, DON'T GUESS:
-Don't know Metallica tone settings? web_search it.
-Unsure which plugin for jazz? web_search it.
-You have internet access - use it.
-
-=== RESPONSE FORMAT ===
-
-Return JSON with this structure (but express yourself naturally):
+=== RESPONSE CONTRACT ===
 {
-  "summary": "Your brief explanation of what you're doing and why",
-  "changes_table": [
-    {"plugin": "...", "parameter": "...", "old_value": "...", "new_value": "...", "reason": "..."}
-  ],
+  "summary": "What you changed and why (human-readable)",
+  "changes_table": [{"plugin": "...", "parameter": "...", "old_value": "...", "new_value": "...", "reason": "..."}],
   "actions": [
     {"type": "set_param", "track": 0, "fx_index": 0, "param_index": 1, "value": 0.75, "reason": "..."},
-    {"type": "web_search", "query": "Neural DSP Gojira Metallica settings", "reason": "..."},
-    {"type": "toggle_fx", "track": 0, "fx_index": 0, "enabled": true, "reason": "..."}
+    {"type": "toggle_fx", "track": 0, "fx_index": 0, "enabled": true, "reason": "..."},
+    {"type": "load_plugin", "track": 0, "plugin_name": "...", "position": 1, "reason": "..."},
+    {"type": "remove_plugin", "track": 0, "fx_index": 2, "reason": "..."},
+    {"type": "web_search", "query": "...", "reason": "..."}
   ]
 }
 
-changes_table is for USER visibility (show display values).
-actions is for EXECUTION (use normalized 0-1 values).
-
-=== THINK FREELY ===
-
-- Use your judgment on parameter ranges
-- Calculate display values based on parameter type
-- Explain your reasoning naturally
-- If uncertain, research or ask for clarification
-- Multi-step changes are fine (enable, then modify, then verify)
-
-=== WHAT YOU SEE VS WHAT USER SEES ===
-
-You see: Raw JSON snapshot, all parameters, technical data
-User sees: Your summary + changes_table in a nice format
-User does NOT see: The actions array, technical logs, or internal reasoning
-
-Be technical in actions, human in summary/changes_table.
+changes_table is user-facing; actions are executable. Be technical in actions, approachable in the summary.
 "#;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -462,13 +406,13 @@ struct ChatMessage {
 
 #[derive(Clone)]
 enum AIProvider {
-    Gemini(GeminiClient),
+    Xai(XaiClient),
 }
 
 impl AIProvider {
     async fn generate(&self, prompt: &str) -> Result<String, Box<dyn Error>> {
         match self {
-            AIProvider::Gemini(client) => client.generate(prompt).await,
+            AIProvider::Xai(client) => client.generate(prompt).await,
         }
     }
 
@@ -479,7 +423,11 @@ impl AIProvider {
         user_prompt: &str,
     ) -> Result<String, Box<dyn Error>> {
         match self {
-            AIProvider::Gemini(client) => client.generate_chat(system_prompt, history, user_prompt).await,
+            AIProvider::Xai(client) => {
+                client
+                    .generate_chat(system_prompt, history, user_prompt)
+                    .await
+            }
         }
     }
 }
@@ -712,6 +660,12 @@ enum PlannedAction {
         position: Option<i32>,
         reason: Option<String>,
     },
+    #[serde(rename = "remove_plugin")]
+    RemovePlugin {
+        track: i32,
+        fx_index: i32,
+        reason: Option<String>,
+    },
     #[serde(rename = "web_search")]
     WebSearch {
         query: String,
@@ -866,6 +820,15 @@ fn normalize_action_track(
             track: map_track(track),
             plugin_name,
             position,
+            reason,
+        },
+        PlannedAction::RemovePlugin {
+            track,
+            fx_index,
+            reason,
+        } => PlannedAction::RemovePlugin {
+            track: map_track(track),
+            fx_index,
             reason,
         },
         other => other,
@@ -1094,6 +1057,35 @@ async fn apply_actions(
                     }
                 }
             }
+            PlannedAction::RemovePlugin {
+                track,
+                fx_index,
+                reason,
+            } => {
+                reaper
+                    .remove_plugin(*track, *fx_index)
+                    .await
+                    .map_err(|e| e.to_string())?;
+                logs.push(format!(
+                    "✓ Removed plugin at track {} slot {} ({})",
+                    track,
+                    fx_index,
+                    reason.clone().unwrap_or_else(|| "no reason".into())
+                ));
+
+                match reaper.get_tracks().await {
+                    Ok(overview) => {
+                        if let Some(t) = overview.tracks.iter().find(|t| t.index == *track) {
+                            if t.fx_list.iter().all(|fx| fx.index != *fx_index) {
+                                logs.push("  ↳ Verified: slot cleared".to_string());
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        logs.push(format!("  ⚠️  Could not verify removal: {}", e));
+                    }
+                }
+            }
             PlannedAction::WebSearch { query, reason } => {
                 logs.push(format!(
                     "🔍 Researching: '{}' ({})",
@@ -1229,7 +1221,7 @@ async fn configure_ai_provider(
 ) -> Result<String, String> {
     let provider_key = provider.to_lowercase();
     let ai_provider = match provider_key.as_str() {
-        "gemini" => AIProvider::Gemini(GeminiClient::new(api_key, model.clone())),
+        "xai" | "grok" => AIProvider::Xai(XaiClient::new(api_key, model.clone())),
         _ => return Err(format!("Unsupported provider: {}", provider)),
     };
 
@@ -1611,7 +1603,10 @@ async fn process_chat_message(
     // ========== UNDO SYSTEM: Begin recording changes ==========
     {
         let mut undo_manager = lock_or_recover(&state.undo_manager);
-        undo_manager.begin_action(&format!("AI: {}", message.chars().take(50).collect::<String>()));
+        undo_manager.begin_action(&format!(
+            "AI: {}",
+            message.chars().take(50).collect::<String>()
+        ));
     }
 
     // Record changes for undo before applying
@@ -1910,7 +1905,12 @@ async fn perform_undo(state: State<'_, AppState>) -> Result<String, String> {
     // Apply inverse of each change
     for change in &action.parameter_changes {
         if let Err(e) = reaper
-            .set_param(change.track, change.fx_index, &change.param_name, change.old_value)
+            .set_param(
+                change.track,
+                change.fx_index,
+                &change.param_name,
+                change.old_value,
+            )
             .await
         {
             eprintln!("[UNDO] Failed to revert param: {}", e);
@@ -1954,7 +1954,12 @@ async fn perform_redo(state: State<'_, AppState>) -> Result<String, String> {
     // Re-apply each change
     for change in &action.parameter_changes {
         if let Err(e) = reaper
-            .set_param(change.track, change.fx_index, &change.param_name, change.new_value)
+            .set_param(
+                change.track,
+                change.fx_index,
+                &change.param_name,
+                change.new_value,
+            )
             .await
         {
             eprintln!("[REDO] Failed to reapply param: {}", e);
@@ -2030,10 +2035,7 @@ fn add_recent_tone(state: &AppState, query: &str, summary: &str, track: i32, cha
 // ==================== EXPORT COMMANDS ====================
 
 #[tauri::command]
-fn export_tone_as_text(
-    changes: Vec<ChangeEntry>,
-    summary: String,
-) -> Result<String, String> {
+fn export_tone_as_text(changes: Vec<ChangeEntry>, summary: String) -> Result<String, String> {
     let mut output = String::new();
 
     output.push_str("═══════════════════════════════════════\n");

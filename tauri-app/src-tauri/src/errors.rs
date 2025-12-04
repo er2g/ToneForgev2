@@ -90,7 +90,7 @@ impl ToneForgeError {
                 "Try refreshing the connection or restarting REAPER."
             }
             ToneForgeError::AiNotConfigured => {
-                "Enter your Gemini API key in the sidebar to get started."
+                "Enter your xAI Grok API key in the sidebar to get started."
             }
             ToneForgeError::AiRequest { .. } => {
                 "Check your internet connection and API key validity."
@@ -98,10 +98,16 @@ impl ToneForgeError {
             ToneForgeError::AiParsing { .. } => "Try rephrasing your request more clearly.",
             ToneForgeError::InvalidParameter { .. } => "Check the parameter name and value range.",
             ToneForgeError::TrackNotFound { .. } => "Make sure the track exists in REAPER.",
-            ToneForgeError::FxNotFound { .. } => "The plugin may have been removed. Refresh the view.",
-            ToneForgeError::ParamNotFound { .. } => "The parameter name may be different. Check the plugin.",
+            ToneForgeError::FxNotFound { .. } => {
+                "The plugin may have been removed. Refresh the view."
+            }
+            ToneForgeError::ParamNotFound { .. } => {
+                "The parameter name may be different. Check the plugin."
+            }
             ToneForgeError::Preset { .. } => "Check if the preset file exists and is valid.",
-            ToneForgeError::AudioProcessing { .. } => "Check if the audio file format is supported.",
+            ToneForgeError::AudioProcessing { .. } => {
+                "Check if the audio file format is supported."
+            }
             ToneForgeError::FileOperation { .. } => "Check file permissions and path validity.",
             ToneForgeError::Network { .. } => "Check your internet connection.",
             ToneForgeError::Config { .. } => "Check your configuration settings.",
