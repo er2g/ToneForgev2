@@ -10,4 +10,6 @@ export interface ChangeEntry {
 export interface ChatResponse {
   summary: string;
   changes_table: ChangeEntry[];
+  engine_report?: string;
+  action_log?: string[];
 }

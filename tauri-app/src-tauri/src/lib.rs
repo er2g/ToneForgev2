@@ -12,15 +12,15 @@ use audio::matcher::{match_profiles, MatchConfig as EqMatchConfig, MatchResult a
 use audio::profile::{extract_eq_profile, EQProfile};
 use gemini_client::GeminiClient;
 use reaper_client::ReaperClient;
-use tone_researcher::ToneResearcher;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
+use tone_researcher::ToneResearcher;
 
 const MAX_HISTORY: usize = 40;
 const PROMPT_HISTORY_LIMIT: usize = 12;
@@ -215,6 +215,8 @@ struct PromptPayload {
     recent_messages: Vec<ConversationEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
     research_context: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    custom_instructions: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -236,6 +238,10 @@ struct ChangeEntry {
 struct ChatResponse {
     summary: String,
     changes_table: Vec<ChangeEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    engine_report: Option<String>,
+    #[serde(default)]
+    action_log: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -245,6 +251,99 @@ struct AIPlan {
     changes_table: Vec<ChangeEntry>,
     #[serde(default)]
     actions: Vec<PlannedAction>,
+}
+
+#[derive(Default)]
+struct EngineDiagnostics {
+    conflicts: Vec<String>,
+    safety_warnings: Vec<String>,
+    suggestions: Vec<String>,
+    optimizations: Vec<String>,
+    preflight: Vec<String>,
+    focus_areas: Vec<String>,
+}
+
+impl EngineDiagnostics {
+    fn record_conflicts(&mut self, conflicts: Vec<String>) {
+        self.conflicts = conflicts;
+    }
+
+    fn push_safety_warning(&mut self, warning: String) {
+        self.safety_warnings.push(warning);
+    }
+
+    fn push_suggestion(&mut self, suggestion: String) {
+        self.suggestions.push(suggestion);
+    }
+
+    fn push_optimization(&mut self, note: String) {
+        self.optimizations.push(note);
+    }
+
+    fn push_preflight(&mut self, note: String) {
+        self.preflight.push(note);
+    }
+
+    fn push_focus(&mut self, focus: String) {
+        self.focus_areas.push(focus);
+    }
+
+    fn is_empty(&self) -> bool {
+        self.conflicts.is_empty()
+            && self.safety_warnings.is_empty()
+            && self.suggestions.is_empty()
+            && self.optimizations.is_empty()
+            && self.preflight.is_empty()
+            && self.focus_areas.is_empty()
+    }
+
+    fn to_report(&self) -> Option<String> {
+        if self.is_empty() {
+            return None;
+        }
+
+        let mut sections = Vec::new();
+
+        if !self.optimizations.is_empty() {
+            sections.push("Optimizations:".to_string());
+            sections.extend(self.optimizations.iter().map(|note| format!("- {}", note)));
+        }
+
+        if !self.preflight.is_empty() {
+            sections.push("Preflight readiness:".to_string());
+            sections.extend(self.preflight.iter().map(|note| format!("- {}", note)));
+        }
+
+        if !self.conflicts.is_empty() {
+            sections.push("Conflicts detected:".to_string());
+            sections.extend(
+                self.conflicts
+                    .iter()
+                    .map(|conflict| format!("- {}", conflict)),
+            );
+        }
+
+        if !self.safety_warnings.is_empty() {
+            sections.push("Safety warnings:".to_string());
+            sections.extend(
+                self.safety_warnings
+                    .iter()
+                    .map(|warn| format!("- {}", warn)),
+            );
+        }
+
+        if !self.suggestions.is_empty() {
+            sections.push("Tone compensations:".to_string());
+            sections.extend(self.suggestions.iter().map(|note| format!("- {}", note)));
+        }
+
+        if !self.focus_areas.is_empty() {
+            sections.push("Action focus:".to_string());
+            sections.extend(self.focus_areas.iter().map(|area| format!("- {}", area)));
+        }
+
+        Some(sections.join("\n"))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -357,16 +456,25 @@ fn build_prompt(payload: &PromptPayload) -> Result<String, String> {
         payload.selected_track
     );
 
+    let mut context_sections = vec![track_hint];
+
+    // Add optional user instructions to steer the AI
+    if let Some(ref instructions) = payload.custom_instructions {
+        let trimmed = instructions.trim();
+        if !trimmed.is_empty() {
+            context_sections.push(format!("CUSTOM INSTRUCTIONS FROM USER:\n{}", trimmed));
+        }
+    }
+
     // Add research context if available (from first AI layer)
-    let research_section = if let Some(ref research) = payload.research_context {
-        format!("\n\n{}\n", research)
-    } else {
-        String::new()
-    };
+    if let Some(ref research) = payload.research_context {
+        context_sections.push(research.clone());
+    }
 
     Ok(format!(
-        "{SYSTEM_PROMPT}\n\n{}{}\n\n=== SNAPSHOT START ===\n{}\n=== SNAPSHOT END ===",
-        track_hint, research_section, context
+        "{SYSTEM_PROMPT}\n\n{}\n\n=== SNAPSHOT START ===\n{}\n=== SNAPSHOT END ===",
+        context_sections.join("\n\n"),
+        context
     ))
 }
 
@@ -464,6 +572,21 @@ fn find_param<'a>(fx: &'a FxState, param_idx: i32) -> Option<&'a FxParamState> {
     fx.params.iter().find(|p| p.index == param_idx)
 }
 
+fn category_label(category: ai_engine::ParameterCategory) -> &'static str {
+    match category {
+        ai_engine::ParameterCategory::Distortion => "Distortion",
+        ai_engine::ParameterCategory::EQ => "EQ",
+        ai_engine::ParameterCategory::Dynamics => "Dynamics",
+        ai_engine::ParameterCategory::Modulation => "Modulation",
+        ai_engine::ParameterCategory::Delay => "Delay",
+        ai_engine::ParameterCategory::Reverb => "Reverb",
+        ai_engine::ParameterCategory::Filter => "Filter",
+        ai_engine::ParameterCategory::Volume => "Volume",
+        ai_engine::ParameterCategory::Toggle => "Toggle",
+        ai_engine::ParameterCategory::Unknown => "Unknown",
+    }
+}
+
 async fn perform_web_search(client: &reqwest::Client, query: &str) -> Result<String, String> {
     let search_url = format!(
         "https://html.duckduckgo.com/html/?q={}",
@@ -489,6 +612,21 @@ async fn perform_web_search(client: &reqwest::Client, query: &str) -> Result<Str
         "Search results preview for '{}': {}",
         query, preview
     ))
+}
+
+fn build_action_reason(action: &ai_engine::ActionPlan, tracks: &[TrackSnapshot]) -> String {
+    if let Some(track_state) = find_track(tracks, action.track) {
+        if let Some(fx_state) = find_fx(track_state, action.fx_index) {
+            if let Some(param_state) = find_param(fx_state, action.param_index) {
+                return format!(
+                    "Set '{}' on '{}' to {:.3} (was {:.3})",
+                    param_state.name, fx_state.name, action.value, param_state.value
+                );
+            }
+        }
+    }
+
+    "Set parameter to new value".into()
 }
 
 async fn apply_actions(
@@ -806,6 +944,7 @@ fn get_chat_history(state: State<'_, AppState>) -> Result<String, String> {
 async fn process_chat_message(
     message: String,
     track: Option<i32>,
+    custom_instructions: Option<String>,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let ai_provider = {
@@ -839,29 +978,34 @@ async fn process_chat_message(
 
     // ========== TONE RESEARCH LAYER (First AI Layer) ==========
     // Detect if user is requesting a specific tone and research it from the internet
-    let research_context = if let Some(tone_request) = state.tone_researcher.detect_tone_request(&message) {
-        println!("[TONE RESEARCH] Detected tone request: {:?}", tone_request);
+    let research_context =
+        if let Some(tone_request) = state.tone_researcher.detect_tone_request(&message) {
+            println!("[TONE RESEARCH] Detected tone request: {:?}", tone_request);
 
-        match state.tone_researcher.research_tone(&tone_request).await {
-            Ok(tone_info) => {
-                println!("[TONE RESEARCH] Research successful! Confidence: {:.0}%", tone_info.confidence * 100.0);
-                let formatted = state.tone_researcher.format_for_ai(&tone_info);
-                Some(formatted)
+            match state.tone_researcher.research_tone(&tone_request).await {
+                Ok(tone_info) => {
+                    println!(
+                        "[TONE RESEARCH] Research successful! Confidence: {:.0}%",
+                        tone_info.confidence * 100.0
+                    );
+                    let formatted = state.tone_researcher.format_for_ai(&tone_info);
+                    Some(formatted)
+                }
+                Err(e) => {
+                    println!("[TONE RESEARCH] Research failed: {}", e);
+                    None
+                }
             }
-            Err(e) => {
-                println!("[TONE RESEARCH] Research failed: {}", e);
-                None
-            }
-        }
-    } else {
-        None
-    };
+        } else {
+            None
+        };
 
     let payload = PromptPayload {
         selected_track: track_idx,
         tracks: tracks_snapshot.clone(),
         recent_messages: history_snapshot,
         research_context,
+        custom_instructions,
     };
 
     let prompt = build_prompt(&payload)?;
@@ -870,6 +1014,8 @@ async fn process_chat_message(
         .await
         .map_err(|e| e.to_string())?;
     let mut plan = parse_plan(&ai_text)?;
+
+    let mut diagnostics = EngineDiagnostics::default();
 
     let available_tracks: HashSet<i32> = tracks_snapshot.iter().map(|t| t.index).collect();
     plan.actions = plan
@@ -923,9 +1069,20 @@ async fn process_chat_message(
     for conflict in &conflicts {
         println!("[AI ENGINE] ⚠️  {}", conflict);
     }
+    diagnostics.record_conflicts(conflicts);
 
     // 2. ACTION DEDUPLICATION & OPTIMIZATION (only for SetParam)
     let deduplicated = ai_engine::ActionOptimizer::deduplicate(set_param_actions);
+    if !deduplicated.is_empty() {
+        diagnostics.push_optimization(format!(
+            "SetParam actions optimized: {} → {} (deduplicated)",
+            plan.actions
+                .iter()
+                .filter(|a| matches!(a, PlannedAction::SetParam { .. }))
+                .count(),
+            deduplicated.len()
+        ));
+    }
     println!(
         "[AI ENGINE] Deduplicated SetParam: {} → {} actions",
         plan.actions
@@ -946,10 +1103,12 @@ async fn process_chat_message(
                         ai_engine::SafetyValidator::validate_value(&param_state.name, action.value);
 
                     if let Some(warn) = warning {
-                        safety_warnings.push(format!(
+                        let formatted = format!(
                             "{} :: {} -> {}: {}",
                             fx_state.name, param_state.name, clamped_value, warn
-                        ));
+                        );
+                        diagnostics.push_safety_warning(formatted.clone());
+                        safety_warnings.push(formatted);
                     }
 
                     // 4. SEMANTIC ANALYSIS & RELATIONSHIP SUGGESTIONS
@@ -966,13 +1125,27 @@ async fn process_chat_message(
                     );
 
                     for (param, delta, reason) in suggestions {
-                        println!(
-                            "[AI ENGINE] 💡 Suggestion: Adjust '{}' by {:.2} ({})",
-                            param, delta, reason
-                        );
+                        let suggestion = format!("Adjust '{}' by {:.2} ({})", param, delta, reason);
+                        println!("[AI ENGINE] 💡 Suggestion: {}", suggestion);
+                        diagnostics.push_suggestion(suggestion);
                     }
+                } else {
+                    diagnostics.push_safety_warning(format!(
+                        "Param {} not found on track {} fx {} — cannot validate value.",
+                        action.param_index, action.track, action.fx_index
+                    ));
                 }
+            } else {
+                diagnostics.push_safety_warning(format!(
+                    "FX {} not available on track {} — skipping parameter edits.",
+                    action.fx_index, action.track
+                ));
             }
+        } else {
+            diagnostics.push_safety_warning(format!(
+                "Track {} missing for planned action (fx {}, param {}).",
+                action.track, action.fx_index, action.param_index
+            ));
         }
     }
 
@@ -980,8 +1153,73 @@ async fn process_chat_message(
         println!("[AI ENGINE] 🛡️  Safety: {}", warning);
     }
 
-    // Rebuild full action list: other_actions FIRST (toggles, loads), then optimized SetParam
-    plan.actions = other_actions;
+    // Track explicit enable intents to avoid double toggles
+    let planned_enables: HashSet<(i32, i32)> = other_actions
+        .iter()
+        .filter_map(|action| match action {
+            PlannedAction::ToggleFx {
+                track,
+                fx_index,
+                enabled: true,
+                ..
+            } => Some((*track, *fx_index)),
+            _ => None,
+        })
+        .collect();
+
+    // 5. PREFLIGHT: auto-enable FX that will be tweaked but are currently bypassed
+    let mut auto_enable_actions = Vec::new();
+    let mut auto_enabled_fx: HashSet<(i32, i32)> = HashSet::new();
+    for action in &deduplicated {
+        if planned_enables.contains(&(action.track, action.fx_index)) {
+            continue;
+        }
+
+        if let Some(track_state) = find_track(&tracks_snapshot, action.track) {
+            if let Some(fx_state) = find_fx(track_state, action.fx_index) {
+                if !fx_state.enabled && auto_enabled_fx.insert((action.track, action.fx_index)) {
+                    auto_enable_actions.push(PlannedAction::ToggleFx {
+                        track: action.track,
+                        fx_index: action.fx_index,
+                        enabled: true,
+                        reason: Some(format!("Enable '{}' before parameter edits", fx_state.name)),
+                    });
+
+                    diagnostics.push_preflight(format!(
+                        "Auto-enabling '{}' on track {} before parameter edits.",
+                        fx_state.name, action.track
+                    ));
+                }
+            }
+        }
+    }
+
+    // 6. ACTION FOCUS SUMMARY
+    let mut category_counts: HashMap<&str, usize> = HashMap::new();
+    for action in &deduplicated {
+        if let Some(track_state) = find_track(&tracks_snapshot, action.track) {
+            if let Some(fx_state) = find_fx(track_state, action.fx_index) {
+                if let Some(param_state) = find_param(fx_state, action.param_index) {
+                    let label =
+                        category_label(ai_engine::SemanticAnalyzer::categorize(&param_state.name));
+                    *category_counts.entry(label).or_default() += 1;
+                }
+            }
+        }
+    }
+
+    if !category_counts.is_empty() {
+        let mut focus_lines: Vec<String> = category_counts
+            .into_iter()
+            .map(|(label, count)| format!("{} x{}", label, count))
+            .collect();
+        focus_lines.sort();
+        diagnostics.push_focus(format!("SetParam coverage: {}", focus_lines.join(", ")));
+    }
+
+    // Rebuild full action list: auto-enables → other_actions → optimized SetParam with enriched reasons
+    plan.actions = auto_enable_actions;
+    plan.actions.extend(other_actions);
     plan.actions.extend(
         deduplicated
             .into_iter()
@@ -990,7 +1228,11 @@ async fn process_chat_message(
                 fx_index: action.fx_index,
                 param_index: action.param_index,
                 value: action.value,
-                reason: Some(action.reason),
+                reason: Some(if action.reason.trim().is_empty() {
+                    build_action_reason(&action, &tracks_snapshot)
+                } else {
+                    action.reason
+                }),
             }),
     );
 
@@ -999,9 +1241,14 @@ async fn process_chat_message(
         plan.actions.len()
     );
 
+    let engine_report = diagnostics.to_report();
+    if let Some(report) = engine_report.as_ref() {
+        plan.summary = format!("{}\n\n[AI Engine Report]\n{}", plan.summary, report);
+    }
+
     let http_client = &state.http_client; // Clone is cheap for reqwest::Client
     let action_logs = apply_actions(&reaper, http_client, &tracks_snapshot, &plan.actions).await?;
-    for log in action_logs {
+    for log in &action_logs {
         println!("[AI ACTION] {}", log);
     }
 
@@ -1020,6 +1267,8 @@ async fn process_chat_message(
     let response = ChatResponse {
         summary: plan.summary,
         changes_table: plan.changes_table,
+        engine_report,
+        action_log: action_logs,
     };
 
     serde_json::to_string(&response).map_err(|e| e.to_string())
