@@ -16,13 +16,13 @@ import { ChatResponse, ChangeEntry, SecureConfig } from "./types";
 import "./App.css";
 
 const PROVIDERS = [
-  { key: "gemini", label: "Google Gemini" },
+  { key: "grok", label: "xAI Grok" },
 ] as const;
 
 type ProviderKey = (typeof PROVIDERS)[number]["key"];
 
 const MODEL_PRESETS: Record<ProviderKey, string[]> = {
-  gemini: ["gemini-2.0-flash", "gemini-2.0-pro-exp", "gemini-1.5-pro"],
+  grok: ["grok-2-latest", "grok-2-vision-latest", "grok-beta"],
 };
 
 interface Message {
@@ -68,8 +68,8 @@ function App() {
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [tracks, setTracks] = useState<TrackInfo[]>([]);
   const [selectedTrack, setSelectedTrack] = useState(0);
-  const [provider, setProvider] = useState<ProviderKey>("gemini");
-  const [model, setModel] = useState(MODEL_PRESETS.gemini[0]);
+  const [provider, setProvider] = useState<ProviderKey>("grok");
+  const [model, setModel] = useState(MODEL_PRESETS.grok[0]);
   const [activeView, setActiveView] = useState<"assistant" | "eq">("assistant");
   const [autoConfigAttempted, setAutoConfigAttempted] = useState(false);
   const [fxSearchQuery, setFxSearchQuery] = useState("");
@@ -687,7 +687,7 @@ function App() {
                     <input
                       id="model"
                       list="model-options"
-                      placeholder="gemini-2.0-flash"
+                      placeholder="grok-2-latest"
                       value={model}
                       onChange={(e) => setModel(e.target.value)}
                     />

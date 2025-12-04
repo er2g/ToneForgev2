@@ -3,7 +3,7 @@ mod ai_engine_tests;
 mod audio;
 mod dsp;
 mod errors;
-mod gemini_client;
+mod grok_client;
 mod reaper_client;
 mod secure_storage;
 mod tone_researcher;
@@ -14,7 +14,7 @@ use audio::loader::{load_audio_file, resample_audio};
 use audio::matcher::{match_profiles, MatchConfig as EqMatchConfig, MatchResult as EqMatchResult};
 use audio::profile::{extract_eq_profile, EQProfile};
 use errors::{ErrorResponse, ToneForgeError};
-use gemini_client::GeminiClient;
+use grok_client::GrokClient;
 use reaper_client::ReaperClient;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -361,96 +361,53 @@ fn lock_or_recover<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<T> {
 }
 
 const SYSTEM_PROMPT: &str = r#"
-You are an autonomous tone engineer for guitar/bass production. You see the complete plugin chain state and must make intelligent modifications based on user requests.
+You are xAI Grok serving as ToneForge's autonomous REAPER tone engineer. Every request includes chat history, custom instructions, and a full REAPER snapshot (tracks, FX chains, parameter values + display values + format hints, enablement states). Think like an audio assistant but act like an API client: return only structured JSON while reasoning richly.
 
-=== TWO-LAYER AI SYSTEM ===
+=== MONOTON KURALLAR (NON-NEGOTIABLE) ===
+- Stay deterministic: always validate plugin/section/parameter availability before edits.
+- Keep actions minimal but sufficient; avoid redundant moves.
+- Prefer reversible, safe tweaks before drastic changes.
+- Surface any ambiguity in the summary so the user can guide you.
 
-You are the SECOND AI layer in a two-layer system:
+=== TOOLKIT ===
+- set_param: change a parameter using normalized 0-1 values.
+- toggle_fx: enable/disable a plugin for hierarchy control.
+- load_plugin: add a plugin at a track slot.
+- remove_plugin: remove a plugin slot cleanly when it's hurting the chain.
+- web_search: use Grok's built-in web search for tone research when first-layer context is insufficient.
+- changes_table: build a human-friendly table of what changed (this is your user-facing table tool).
 
-🔍 FIRST LAYER (Tone Research AI):
-- When users request specific tones (e.g., "Chuck Schuldiner Symbolic tone", "Metallica Master of Puppets sound")
-- Automatically searches the internet (Equipboard, forums, YouTube, etc.)
-- Gathers detailed information: equipment, amp settings, effects chain, techniques
-- Provides you with a "TONE RESEARCH RESULTS" section if available
-
-🎛️ SECOND LAYER (You - Tone Implementation AI):
-- You receive the research results from the first AI layer
-- Your job is to IMPLEMENT those findings using available plugins
-- Match the described tone as closely as possible with current plugin parameters
-- If research results are available, USE THEM as your primary reference
-
-=== UNDERSTANDING THE DATA ===
-
-Each parameter has:
-- value: 0.0-1.0 normalized (what you SET)
-- display: real-world value with units ("-6.2 dB", "432 Hz")
-- format_hint: type (decibel/frequency/percentage/time/raw)
-
-Each FX has:
-- enabled: whether plugin is active
-- params: all parameters with current state
-
-=== YOUR CAPABILITIES ===
-
-1. MODIFY: set_param, toggle_fx, load_plugin
-2. RESEARCH: web_search (use when you need additional info beyond the first AI layer)
-3. REASON: Think through the problem before acting
-
-=== CRITICAL PRINCIPLES ===
-
-🔴 HIERARCHICAL VALIDATION:
-Before touching ANY control, verify the hierarchy:
-Plugin enabled? → Section/pedal enabled? → Parameter accessible?
-
-If something is disabled at ANY level, enable it FIRST, then proceed.
-Example: Changing "Overdrive Gain" requires:
-  1. Plugin enabled ✓
-  2. "Overdrive On" parameter = active ✓
-  3. Then modify gain
-
-🔴 POST-ACTION VERIFICATION:
-After you return actions, the system will re-fetch state and show you the results.
-Your actions will be applied, then you'll see if they worked.
-Plan accordingly - if something might need follow-up, mention it.
-
-🔴 RESEARCH, DON'T GUESS:
-Don't know Metallica tone settings? web_search it.
-Unsure which plugin for jazz? web_search it.
-You have internet access - use it.
+=== TWO-LAYER FLOW ===
+- A separate tone researcher may supply "TONE RESEARCH RESULTS". Treat it as authoritative.
+- If more detail is required, trigger web_search with precise queries (artist, album, plugin names, mic positions, etc.).
 
 === RESPONSE FORMAT ===
-
-Return JSON with this structure (but express yourself naturally):
+Return JSON only:
 {
-  "summary": "Your brief explanation of what you're doing and why",
+  "summary": "Short narrative of intent and rationale",
   "changes_table": [
     {"plugin": "...", "parameter": "...", "old_value": "...", "new_value": "...", "reason": "..."}
   ],
   "actions": [
     {"type": "set_param", "track": 0, "fx_index": 0, "param_index": 1, "value": 0.75, "reason": "..."},
-    {"type": "web_search", "query": "Neural DSP Gojira Metallica settings", "reason": "..."},
-    {"type": "toggle_fx", "track": 0, "fx_index": 0, "enabled": true, "reason": "..."}
+    {"type": "remove_plugin", "track": 0, "fx_index": 2, "reason": "..."},
+    {"type": "toggle_fx", "track": 0, "fx_index": 0, "enabled": true, "reason": "..."},
+    {"type": "web_search", "query": "Neural DSP Gojira Metallica settings", "reason": "..."}
   ]
 }
 
-changes_table is for USER visibility (show display values).
-actions is for EXECUTION (use normalized 0-1 values).
+changes_table is USER-FACING (use display values and clear reasons).
+actions are EXECUTION-FACING (normalized values, precise targets).
 
-=== THINK FREELY ===
+=== THINK FREELY BUT VERIFY ===
+- Map normalized values to musical intent based on format_hint.
+- If something is disabled, enable it first (hierarchical validation) before edits.
+- After proposing actions, anticipate verification and call out anything to double-check.
+- For tone hunting, default to Grok's web search instead of guessing.
 
-- Use your judgment on parameter ranges
-- Calculate display values based on parameter type
-- Explain your reasoning naturally
-- If uncertain, research or ask for clarification
-- Multi-step changes are fine (enable, then modify, then verify)
-
-=== WHAT YOU SEE VS WHAT USER SEES ===
-
-You see: Raw JSON snapshot, all parameters, technical data
-User sees: Your summary + changes_table in a nice format
-User does NOT see: The actions array, technical logs, or internal reasoning
-
-Be technical in actions, human in summary/changes_table.
+What you see: raw JSON state, history, research context.
+What the user sees: summary + changes_table only (no internal reasoning or raw actions).
+Be technical in actions and fluent in summary.
 "#;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -462,13 +419,13 @@ struct ChatMessage {
 
 #[derive(Clone)]
 enum AIProvider {
-    Gemini(GeminiClient),
+    Grok(GrokClient),
 }
 
 impl AIProvider {
     async fn generate(&self, prompt: &str) -> Result<String, Box<dyn Error>> {
         match self {
-            AIProvider::Gemini(client) => client.generate(prompt).await,
+            AIProvider::Grok(client) => client.generate(prompt).await,
         }
     }
 
@@ -479,7 +436,7 @@ impl AIProvider {
         user_prompt: &str,
     ) -> Result<String, Box<dyn Error>> {
         match self {
-            AIProvider::Gemini(client) => client.generate_chat(system_prompt, history, user_prompt).await,
+            AIProvider::Grok(client) => client.generate_chat(system_prompt, history, user_prompt).await,
         }
     }
 }
@@ -712,6 +669,12 @@ enum PlannedAction {
         position: Option<i32>,
         reason: Option<String>,
     },
+    #[serde(rename = "remove_plugin")]
+    RemovePlugin {
+        track: i32,
+        fx_index: i32,
+        reason: Option<String>,
+    },
     #[serde(rename = "web_search")]
     WebSearch {
         query: String,
@@ -866,6 +829,15 @@ fn normalize_action_track(
             track: map_track(track),
             plugin_name,
             position,
+            reason,
+        },
+        PlannedAction::RemovePlugin {
+            track,
+            fx_index,
+            reason,
+        } => PlannedAction::RemovePlugin {
+            track: map_track(track),
+            fx_index,
             reason,
         },
         other => other,
@@ -1094,6 +1066,39 @@ async fn apply_actions(
                     }
                 }
             }
+            PlannedAction::RemovePlugin {
+                track,
+                fx_index,
+                reason,
+            } => {
+                reaper
+                    .remove_plugin(*track, *fx_index)
+                    .await
+                    .map_err(|e| e.to_string())?;
+
+                logs.push(format!(
+                    "✓ Removed plugin at track {} slot {} ({})",
+                    track,
+                    fx_index,
+                    reason.clone().unwrap_or_else(|| "no reason".into())
+                ));
+
+                match reaper.get_tracks().await {
+                    Ok(overview) => {
+                        if let Some(t) = overview.tracks.iter().find(|t| t.index == *track) {
+                            let still_exists = t.fx_list.iter().any(|fx| fx.index == *fx_index);
+                            if still_exists {
+                                logs.push("  ⚠️  Removal not confirmed: slot still reported".into());
+                            } else {
+                                logs.push("  ↳ Verified removal in track overview".into());
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        logs.push(format!("  ⚠️  Could not verify removal: {}", e));
+                    }
+                }
+            }
             PlannedAction::WebSearch { query, reason } => {
                 logs.push(format!(
                     "🔍 Researching: '{}' ({})",
@@ -1229,7 +1234,7 @@ async fn configure_ai_provider(
 ) -> Result<String, String> {
     let provider_key = provider.to_lowercase();
     let ai_provider = match provider_key.as_str() {
-        "gemini" => AIProvider::Gemini(GeminiClient::new(api_key, model.clone())),
+        "grok" => AIProvider::Grok(GrokClient::new(api_key, model.clone())),
         _ => return Err(format!("Unsupported provider: {}", provider)),
     };
 

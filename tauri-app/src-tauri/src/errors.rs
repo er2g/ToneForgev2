@@ -90,7 +90,7 @@ impl ToneForgeError {
                 "Try refreshing the connection or restarting REAPER."
             }
             ToneForgeError::AiNotConfigured => {
-                "Enter your Gemini API key in the sidebar to get started."
+                "Enter your xAI Grok API key in the sidebar to get started."
             }
             ToneForgeError::AiRequest { .. } => {
                 "Check your internet connection and API key validity."
