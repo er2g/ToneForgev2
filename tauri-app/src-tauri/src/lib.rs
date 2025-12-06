@@ -1,36 +1,41 @@
-//! ToneForge v2 - Two-Tier AI Tone Generation System
+//! ToneForge v2 - Multi-Mode AI Conversation System
 //!
-//! Architecture:
-//! - Tier 1 (Tone AI): Searches encyclopedia or generates tone recommendations
-//! - Tier 2 (Parameter AI): Maps tone parameters to REAPER with precision
+//! Three AI Modes:
+//! - 🔍 Researcher: Tone research and discussion (no REAPER)
+//! - 📋 Planner: Analysis and suggestions (read-only REAPER)
+//! - ⚡ Act: Direct application (full two-tier system)
+//!
+//! Each mode operates in independent conversation rooms!
 
+mod act_mode;
 mod ai_client;
 mod audio;
+mod conversation;
 mod dsp;
 mod errors;
 mod parameter_ai;
+mod planner_mode;
 mod reaper_client;
+mod researcher_mode;
 mod secure_storage;
 mod tone_ai;
 mod tone_encyclopedia;
 mod undo_redo;
 
+use act_mode::ActMode;
 use ai_client::AIProvider;
 use audio::analyzer::{analyze_spectrum, AnalysisConfig};
 use audio::loader::{load_audio_file, resample_audio};
 use audio::matcher::{match_profiles, MatchConfig as EqMatchConfig, MatchResult as EqMatchResult};
 use audio::profile::{extract_eq_profile, EQProfile};
-use parameter_ai::{ParameterAction, ParameterAI, ReaperParameter, ReaperPlugin, ReaperSnapshot};
+use conversation::{Conversation, ConversationManager, ConversationMode, ConversationSummary, Message, MessageMetadata, MessageRole};
+use planner_mode::PlannerMode;
 use reaper_client::ReaperClient;
+use researcher_mode::ResearcherMode;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::error::Error;
 use std::fs;
-use std::path::PathBuf;
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
-use tone_ai::{ToneAI, ToneAIResult, ToneSource};
 use tone_encyclopedia::ToneEncyclopedia;
 use undo_redo::{UndoManager, UndoState};
 
@@ -43,9 +48,10 @@ struct AppState {
     ai_provider: Mutex<Option<AIProvider>>,
     tone_encyclopedia: Mutex<ToneEncyclopedia>,
     undo_manager: Mutex<UndoManager>,
+    conversation_manager: Mutex<ConversationManager>,
 }
 
-// ==================== TAURI COMMANDS ====================
+// ==================== AI CONFIGURATION ====================
 
 #[tauri::command]
 async fn check_reaper_connection(state: State<'_, AppState>) -> Result<bool, String> {
@@ -78,16 +84,102 @@ async fn configure_ai_provider(
     ))
 }
 
+// ==================== CONVERSATION MANAGEMENT ====================
+
 #[tauri::command]
-async fn process_tone_request(
-    message: String,
-    track: Option<i32>,
+fn create_conversation(
+    title: String,
+    mode: String,
     state: State<'_, AppState>,
 ) -> Result<String, String> {
-    println!("\n========== TWO-TIER AI PIPELINE START ==========");
-    println!("[USER] {}", message);
+    let conversation_mode = match mode.to_lowercase().as_str() {
+        "researcher" => ConversationMode::Researcher,
+        "planner" => ConversationMode::Planner,
+        "act" => ConversationMode::Act,
+        _ => return Err(format!("Unknown mode: {}", mode)),
+    };
 
-    let track_idx = track.unwrap_or(0);
+    let mut manager = state.conversation_manager.lock().unwrap();
+    let id = manager.create_conversation(title, conversation_mode);
+
+    Ok(id)
+}
+
+#[tauri::command]
+fn list_conversations(state: State<'_, AppState>) -> Result<String, String> {
+    let manager = state.conversation_manager.lock().unwrap();
+    let conversations = manager.list_active_conversations();
+
+    let summaries: Vec<ConversationSummary> = conversations
+        .iter()
+        .map(|c| ConversationSummary::from(*c))
+        .collect();
+
+    serde_json::to_string(&summaries).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_conversation(
+    conversation_id: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let manager = state.conversation_manager.lock().unwrap();
+
+    let conversation = manager
+        .get_conversation(&conversation_id)
+        .ok_or_else(|| "Conversation not found".to_string())?;
+
+    serde_json::to_string(conversation).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_conversation(
+    conversation_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mut manager = state.conversation_manager.lock().unwrap();
+
+    if manager.delete_conversation(&conversation_id) {
+        Ok(())
+    } else {
+        Err("Conversation not found".to_string())
+    }
+}
+
+#[tauri::command]
+fn clear_conversation(
+    conversation_id: String,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let mut manager = state.conversation_manager.lock().unwrap();
+    manager.clear_conversation(&conversation_id)
+}
+
+// ==================== MESSAGE PROCESSING ====================
+
+#[tauri::command]
+async fn send_message(
+    conversation_id: String,
+    message: String,
+    track_index: Option<i32>,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    // Get conversation details
+    let (mode, conversation_history) = {
+        let manager = state.conversation_manager.lock().unwrap();
+        let conversation = manager
+            .get_conversation(&conversation_id)
+            .ok_or_else(|| "Conversation not found".to_string())?;
+
+        let history: Vec<Message> = conversation.messages.clone();
+        (conversation.mode, history)
+    };
+
+    // Add user message to conversation
+    {
+        let mut manager = state.conversation_manager.lock().unwrap();
+        manager.add_message(&conversation_id, MessageRole::User, message.clone(), None)?;
+    }
 
     // Get AI provider
     let ai_provider = {
@@ -97,252 +189,135 @@ async fn process_tone_request(
             .ok_or_else(|| "AI provider not configured".to_string())?
     };
 
-    // ========== TIER 1: TONE AI ==========
-    println!("\n[TIER 1] Running Tone AI...");
-
-    let tone_ai = {
-        let encyclopedia = state.tone_encyclopedia.lock().unwrap().clone();
-        ToneAI::new(encyclopedia).with_ai_provider(ai_provider.clone())
+    // Process based on mode
+    let response_data = match mode {
+        ConversationMode::Researcher => {
+            process_researcher_message(&message, &conversation_history, &state, ai_provider).await?
+        }
+        ConversationMode::Planner => {
+            let track = track_index.unwrap_or(0);
+            process_planner_message(&message, &conversation_history, track, &state, ai_provider).await?
+        }
+        ConversationMode::Act => {
+            let track = track_index.unwrap_or(0);
+            process_act_message(&message, track, &state, ai_provider).await?
+        }
     };
 
-    let tone_result = tone_ai
-        .process_request(&message)
-        .await
-        .map_err(|e| format!("Tone AI error: {}", e))?;
-
-    println!("[TIER 1] Result:");
-    println!("  - Source: {:?}", tone_result.source);
-    println!("  - Description: {}", tone_result.tone_description);
-    println!("  - Confidence: {:.0}%", tone_result.confidence * 100.0);
-
-    // ========== GET REAPER SNAPSHOT ==========
-    println!("\n[REAPER] Fetching current state...");
-
-    let reaper_snapshot = {
-        let reaper = state.reaper.lock().unwrap();
-        collect_reaper_snapshot(&reaper, track_idx)
-            .await
-            .map_err(|e| format!("Failed to get REAPER state: {}", e))?
-    };
-
-    println!("[REAPER] Track: {}", reaper_snapshot.track_name);
-    println!("[REAPER] Plugins: {}", reaper_snapshot.plugins.len());
-
-    // ========== TIER 2: PARAMETER AI ==========
-    println!("\n[TIER 2] Running Parameter AI...");
-
-    let parameter_ai = ParameterAI::new(ai_provider);
-
-    let parameter_result = parameter_ai
-        .map_parameters(
-            &tone_result.parameters,
-            &reaper_snapshot,
-            &tone_result.tone_description,
-        )
-        .await
-        .map_err(|e| format!("Parameter AI error: {}", e))?;
-
-    println!("[TIER 2] Generated {} actions", parameter_result.actions.len());
-    println!("[TIER 2] Summary: {}", parameter_result.summary);
-
-    if !parameter_result.warnings.is_empty() {
-        println!("[TIER 2] Warnings:");
-        for warning in &parameter_result.warnings {
-            println!("  ⚠️  {}", warning);
-        }
-    }
-
-    // ========== VALIDATE ACTIONS ==========
-    let validation_warnings = parameter_ai.validate_actions(&parameter_result.actions, &reaper_snapshot);
-
-    if !validation_warnings.is_empty() {
-        println!("\n[VALIDATION] Warnings:");
-        for warning in &validation_warnings {
-            println!("  ⚠️  {}", warning);
-        }
-    }
-
-    // ========== RECORD FOR UNDO ==========
+    // Add assistant response to conversation
     {
-        let mut undo_manager = state.undo_manager.lock().unwrap();
-        undo_manager.begin_action(&format!("Tone: {}", message));
+        let mut manager = state.conversation_manager.lock().unwrap();
+        manager.add_message(
+            &conversation_id,
+            MessageRole::Assistant,
+            response_data.content.clone(),
+            response_data.metadata,
+        )?;
     }
 
-    // ========== APPLY ACTIONS TO REAPER ==========
-    println!("\n[APPLY] Applying actions to REAPER...");
-
-    let action_logs = {
-        let reaper = state.reaper.lock().unwrap();
-        apply_parameter_actions(&reaper, &parameter_result.actions, &reaper_snapshot, &mut state.undo_manager.lock().unwrap())
-            .await
-            .map_err(|e| format!("Failed to apply actions: {}", e))?
-    };
-
-    for log in &action_logs {
-        println!("[ACTION] {}", log);
-    }
-
-    // ========== COMMIT UNDO ==========
-    {
-        let mut undo_manager = state.undo_manager.lock().unwrap();
-        if let Some(action_id) = undo_manager.commit_action() {
-            println!("[UNDO] Recorded action: {}", action_id);
-        }
-    }
-
-    println!("\n========== TWO-TIER AI PIPELINE COMPLETE ==========\n");
-
-    // Build response
-    let response = ToneResponse {
-        tone_source: format!("{:?}", tone_result.source),
-        tone_description: tone_result.tone_description,
-        confidence: tone_result.confidence,
-        summary: parameter_result.summary,
-        actions_count: parameter_result.actions.len(),
-        action_logs,
-        warnings: parameter_result.warnings,
-        validation_warnings,
-    };
-
-    serde_json::to_string(&response).map_err(|e| e.to_string())
+    Ok(serde_json::to_string(&response_data).map_err(|e| e.to_string())?)
 }
 
 #[derive(Serialize)]
-struct ToneResponse {
-    tone_source: String,
-    tone_description: String,
-    confidence: f32,
-    summary: String,
-    actions_count: usize,
-    action_logs: Vec<String>,
-    warnings: Vec<String>,
-    validation_warnings: Vec<String>,
+struct MessageResponseData {
+    content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata: Option<MessageMetadata>,
 }
 
-// ==================== REAPER SNAPSHOT COLLECTION ====================
+async fn process_researcher_message(
+    message: &str,
+    history: &[Message],
+    state: &State<'_, AppState>,
+    ai_provider: AIProvider,
+) -> Result<MessageResponseData, String> {
+    let encyclopedia = state.tone_encyclopedia.lock().unwrap().clone();
 
-async fn collect_reaper_snapshot(
-    reaper: &ReaperClient,
-    track_idx: i32,
-) -> Result<ReaperSnapshot, Box<dyn Error>> {
-    let overview = reaper.get_tracks().await?;
+    let researcher = ResearcherMode::new(encyclopedia, ai_provider);
 
-    let track = overview
-        .tracks
-        .iter()
-        .find(|t| t.index == track_idx)
-        .ok_or_else(|| format!("Track {} not found", track_idx))?;
+    let history_refs: Vec<&Message> = history.iter().collect();
+    let response = researcher.process_message(message, &history_refs).await?;
 
-    let mut plugins = Vec::new();
+    let metadata = MessageMetadata {
+        actions_count: None,
+        encyclopedia_matches: Some(response.encyclopedia_matches.len()),
+        suggestions_count: Some(response.suggestions.len()),
+        notes: if response.suggestions.is_empty() {
+            None
+        } else {
+            Some(response.suggestions)
+        },
+    };
 
-    for fx in &track.fx_list {
-        let params_snapshot = reaper.get_fx_params(track_idx, fx.index).await?;
-
-        let parameters: Vec<ReaperParameter> = params_snapshot
-            .params
-            .into_iter()
-            .map(|p| ReaperParameter {
-                index: p.index,
-                name: p.name,
-                current_value: p.value,
-                display_value: p.display,
-            })
-            .collect();
-
-        plugins.push(ReaperPlugin {
-            index: fx.index,
-            name: fx.name.clone(),
-            enabled: fx.enabled,
-            parameters,
-        });
-    }
-
-    Ok(ReaperSnapshot {
-        track_index: track_idx,
-        track_name: track.name.clone(),
-        plugins,
+    Ok(MessageResponseData {
+        content: response.content,
+        metadata: Some(metadata),
     })
 }
 
-// ==================== APPLY PARAMETER ACTIONS ====================
+async fn process_planner_message(
+    message: &str,
+    history: &[Message],
+    track_index: i32,
+    state: &State<'_, AppState>,
+    ai_provider: AIProvider,
+) -> Result<MessageResponseData, String> {
+    let reaper = state.reaper.lock().unwrap().clone();
 
-async fn apply_parameter_actions(
-    reaper: &ReaperClient,
-    actions: &[ParameterAction],
-    snapshot: &ReaperSnapshot,
-    undo_manager: &mut UndoManager,
-) -> Result<Vec<String>, Box<dyn Error>> {
-    let mut logs = Vec::new();
+    let planner = PlannerMode::new(reaper, ai_provider);
 
-    for action in actions {
-        match action {
-            ParameterAction::SetParameter {
-                track,
-                plugin_index,
-                param_index,
-                param_name,
-                value,
-                reason,
-            } => {
-                // Find current value for undo
-                if let Some(plugin) = snapshot.plugins.iter().find(|p| p.index == *plugin_index) {
-                    if let Some(param) = plugin.parameters.iter().find(|p| p.index == *param_index) {
-                        // Record for undo
-                        undo_manager.record_param_change(
-                            *track,
-                            *plugin_index,
-                            *param_index,
-                            param_name,
-                            param.current_value,
-                            *value,
-                        );
+    let history_refs: Vec<&Message> = history.iter().collect();
+    let response = planner.process_message(message, &history_refs, track_index).await?;
 
-                        // Apply change
-                        reaper.set_param(*track, *plugin_index, param_name, *value).await?;
+    let metadata = MessageMetadata {
+        actions_count: None,
+        encyclopedia_matches: None,
+        suggestions_count: Some(response.suggestions.len()),
+        notes: Some(vec![response.current_state_summary]),
+    };
 
-                        logs.push(format!(
-                            "✓ {} :: {} = {:.1}% (was {:.1}%) - {}",
-                            plugin.name,
-                            param_name,
-                            value * 100.0,
-                            param.current_value * 100.0,
-                            reason
-                        ));
-                    }
-                }
-            }
-            ParameterAction::EnablePlugin {
-                track,
-                plugin_index,
-                plugin_name,
-                reason,
-            } => {
-                // Find current state for undo
-                if let Some(plugin) = snapshot.plugins.iter().find(|p| p.index == *plugin_index) {
-                    undo_manager.record_fx_toggle(*track, *plugin_index, plugin_name, plugin.enabled);
-                }
+    Ok(MessageResponseData {
+        content: response.content,
+        metadata: Some(metadata),
+    })
+}
 
-                reaper.set_fx_enabled(*track, *plugin_index, true).await?;
+async fn process_act_message(
+    message: &str,
+    track_index: i32,
+    state: &State<'_, AppState>,
+    ai_provider: AIProvider,
+) -> Result<MessageResponseData, String> {
+    let encyclopedia = state.tone_encyclopedia.lock().unwrap().clone();
+    let reaper = state.reaper.lock().unwrap().clone();
 
-                logs.push(format!("✓ Enabled '{}' - {}", plugin_name, reason));
-            }
-            ParameterAction::LoadPlugin {
-                track,
-                plugin_name,
-                reason,
-                ..
-            } => {
-                let slot = reaper.add_plugin(*track, plugin_name).await?;
+    let act_mode = ActMode::new(encyclopedia, reaper, ai_provider);
 
-                logs.push(format!(
-                    "✓ Loaded '{}' at slot {} - {}",
-                    plugin_name, slot, reason
-                ));
-            }
-        }
-    }
+    let mut undo_manager = state.undo_manager.lock().unwrap();
+    let response = act_mode.process_message(message, track_index, &mut undo_manager).await?;
 
-    Ok(logs)
+    let content = format!(
+        "**{}**\n\n{}\n\n**Actions Applied**: {}\n\n**Details**:\n{}",
+        response.tone_description,
+        response.summary,
+        response.actions_count,
+        response.action_logs.join("\n")
+    );
+
+    let mut notes = response.action_logs;
+    notes.extend(response.warnings);
+
+    let metadata = MessageMetadata {
+        actions_count: Some(response.actions_count),
+        encyclopedia_matches: None,
+        suggestions_count: None,
+        notes: Some(notes),
+    };
+
+    Ok(MessageResponseData {
+        content,
+        metadata: Some(metadata),
+    })
 }
 
 // ==================== ENCYCLOPEDIA MANAGEMENT ====================
@@ -350,7 +325,6 @@ async fn apply_parameter_actions(
 #[tauri::command]
 async fn load_encyclopedia(path: String, state: State<'_, AppState>) -> Result<String, String> {
     let encyclopedia = ToneEncyclopedia::load_from_file(&path)?;
-
     let count = encyclopedia.count();
 
     let mut guard = state.tone_encyclopedia.lock().unwrap();
@@ -379,7 +353,6 @@ async fn search_encyclopedia(
     state: State<'_, AppState>,
 ) -> Result<String, String> {
     let encyclopedia = state.tone_encyclopedia.lock().unwrap();
-
     let results = encyclopedia.search(&query, limit.unwrap_or(10));
 
     #[derive(Serialize)]
@@ -409,7 +382,7 @@ async fn search_encyclopedia(
     serde_json::to_string(&response).map_err(|e| e.to_string())
 }
 
-// ==================== UNDO/REDO COMMANDS ====================
+// ==================== UNDO/REDO ====================
 
 #[tauri::command]
 fn get_undo_state(state: State<'_, AppState>) -> Result<String, String> {
@@ -431,7 +404,6 @@ async fn perform_undo(state: State<'_, AppState>) -> Result<String, String> {
 
     let reaper = state.reaper.lock().unwrap();
 
-    // Apply inverse of each change
     for change in &action.parameter_changes {
         if let Err(e) = reaper
             .set_param(
@@ -455,7 +427,6 @@ async fn perform_undo(state: State<'_, AppState>) -> Result<String, String> {
         }
     }
 
-    // Move action to redo stack
     {
         let mut manager = state.undo_manager.lock().unwrap();
         manager.push_redo(action.clone());
@@ -477,7 +448,6 @@ async fn perform_redo(state: State<'_, AppState>) -> Result<String, String> {
 
     let reaper = state.reaper.lock().unwrap();
 
-    // Re-apply each change
     for change in &action.parameter_changes {
         if let Err(e) = reaper
             .set_param(
@@ -501,7 +471,6 @@ async fn perform_redo(state: State<'_, AppState>) -> Result<String, String> {
         }
     }
 
-    // Move action back to undo stack
     {
         let mut manager = state.undo_manager.lock().unwrap();
         manager.push_undo(action.clone());
@@ -581,7 +550,7 @@ fn has_saved_api_config() -> bool {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Try to load encyclopedia on startup
+    // Load encyclopedia on startup
     let encyclopedia = ToneEncyclopedia::load_from_file(ENCYCLOPEDIA_PATH)
         .unwrap_or_else(|e| {
             println!("[STARTUP] Failed to load encyclopedia: {}", e);
@@ -590,6 +559,8 @@ pub fn run() {
         });
 
     println!("[STARTUP] Encyclopedia loaded: {} tones", encyclopedia.count());
+    println!("[STARTUP] Multi-mode conversation system initialized");
+    println!("[STARTUP] Modes: 🔍 Researcher | 📋 Planner | ⚡ Act");
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -599,15 +570,22 @@ pub fn run() {
             ai_provider: Mutex::new(None),
             tone_encyclopedia: Mutex::new(encyclopedia),
             undo_manager: Mutex::new(UndoManager::new()),
+            conversation_manager: Mutex::new(ConversationManager::new()),
         })
         .invoke_handler(tauri::generate_handler![
             // Connection
             check_reaper_connection,
             // AI Configuration
             configure_ai_provider,
-            // Tone Processing (Main Feature)
-            process_tone_request,
-            // Encyclopedia Management
+            // Conversation Management
+            create_conversation,
+            list_conversations,
+            get_conversation,
+            delete_conversation,
+            clear_conversation,
+            // Messaging
+            send_message,
+            // Encyclopedia
             load_encyclopedia,
             get_encyclopedia_stats,
             search_encyclopedia,
