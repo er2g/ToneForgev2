@@ -1,0 +1,356 @@
+{
+  "version": "1.0",
+  "tones": [
+    {
+      "id": "metallica_master_of_puppets_battery",
+      "artist": "Metallica",
+      "album": "Master of Puppets",
+      "song": "Battery",
+      "year": 1986,
+      "genre": "Thrash Metal",
+      "instrument": "guitar",
+      "description": "Aggressive thrash metal rhythm tone with scooped mids and tight palm muting. Iconic 80s thrash sound with Mesa Boogie Mark IIC+",
+      "equipment": {
+        "guitar": "Gibson Explorer",
+        "amp": "Mesa Boogie Mark IIC+",
+        "cabinet": "Marshall 1960A 4x12",
+        "pedals": []
+      },
+      "parameters": {
+        "amp": {
+          "gain": 0.85,
+          "bass": 0.6,
+          "mid": 0.3,
+          "treble": 0.75,
+          "presence": 0.7,
+          "master": 0.8
+        },
+        "eq": {
+          "80Hz": -2.0,
+          "200Hz": -3.0,
+          "800Hz": -4.0,
+          "2kHz": 1.0,
+          "5kHz": 2.0
+        },
+        "effects": [
+          {
+            "effect_type": "noise_gate",
+            "parameters": {
+              "threshold": 0.3,
+              "attack": 0.1,
+              "release": 0.2
+            }
+          }
+        ],
+        "reverb": {
+          "room_size": 0.15,
+          "mix": 0.08
+        },
+        "delay": {}
+      },
+      "techniques": [
+        "downpicking",
+        "palm muting",
+        "drop D tuning"
+      ],
+      "tags": [
+        "aggressive",
+        "scooped",
+        "tight",
+        "thrash",
+        "80s"
+      ]
+    },
+    {
+      "id": "metallica_master_of_puppets_lead",
+      "artist": "Metallica",
+      "album": "Master of Puppets",
+      "song": "Master of Puppets",
+      "year": 1986,
+      "genre": "Thrash Metal",
+      "instrument": "guitar",
+      "description": "Lead guitar tone for solos - higher gain with more mids for cutting through the mix",
+      "equipment": {
+        "guitar": "Gibson Les Paul",
+        "amp": "Mesa Boogie Mark IIC+",
+        "cabinet": "Marshall 1960A 4x12",
+        "pedals": [
+          "Ibanez Tube Screamer"
+        ]
+      },
+      "parameters": {
+        "amp": {
+          "gain": 0.9,
+          "bass": 0.5,
+          "mid": 0.6,
+          "treble": 0.8,
+          "presence": 0.75,
+          "master": 0.85
+        },
+        "eq": {
+          "200Hz": -2.0,
+          "800Hz": 2.0,
+          "2kHz": 3.0,
+          "5kHz": 1.5
+        },
+        "effects": [
+          {
+            "effect_type": "overdrive",
+            "parameters": {
+              "drive": 0.4,
+              "tone": 0.6,
+              "level": 0.8
+            }
+          }
+        ],
+        "reverb": {
+          "room_size": 0.2,
+          "mix": 0.12
+        },
+        "delay": {
+          "time": 0.35,
+          "feedback": 0.25,
+          "mix": 0.2
+        }
+      },
+      "techniques": [
+        "alternate picking",
+        "legato",
+        "vibrato"
+      ],
+      "tags": [
+        "lead",
+        "solo",
+        "cutting",
+        "thrash"
+      ]
+    },
+    {
+      "id": "nirvana_nevermind_grunge",
+      "artist": "Nirvana",
+      "album": "Nevermind",
+      "song": "Smells Like Teen Spirit",
+      "year": 1991,
+      "genre": "Grunge",
+      "instrument": "guitar",
+      "description": "Classic grunge tone - dirty, fuzzy, with a lot of midrange. Mesa Boogie + Boss DS-1 combination",
+      "equipment": {
+        "guitar": "Fender Jaguar",
+        "amp": "Mesa Boogie Studio Preamp",
+        "cabinet": "Marshall 4x12",
+        "pedals": [
+          "Boss DS-1 Distortion",
+          "Electro-Harmonix Small Clone Chorus"
+        ]
+      },
+      "parameters": {
+        "amp": {
+          "gain": 0.7,
+          "bass": 0.65,
+          "mid": 0.7,
+          "treble": 0.6,
+          "presence": 0.5,
+          "master": 0.75
+        },
+        "eq": {
+          "100Hz": 1.0,
+          "400Hz": 2.0,
+          "1kHz": 1.5,
+          "3kHz": -1.0
+        },
+        "effects": [
+          {
+            "effect_type": "distortion",
+            "parameters": {
+              "dist": 0.65,
+              "tone": 0.5,
+              "level": 0.7
+            }
+          },
+          {
+            "effect_type": "chorus",
+            "parameters": {
+              "rate": 0.3,
+              "depth": 0.5,
+              "mix": 0.4
+            }
+          }
+        ],
+        "reverb": {
+          "room_size": 0.25,
+          "mix": 0.15
+        },
+        "delay": {}
+      },
+      "techniques": [
+        "power chords",
+        "palm muting",
+        "drop D tuning"
+      ],
+      "tags": [
+        "grunge",
+        "dirty",
+        "fuzzy",
+        "90s",
+        "alternative"
+      ]
+    },
+    {
+      "id": "pink_floyd_comfortably_numb_solo",
+      "artist": "Pink Floyd",
+      "album": "The Wall",
+      "song": "Comfortably Numb",
+      "year": 1979,
+      "genre": "Progressive Rock",
+      "instrument": "guitar",
+      "description": "Legendary David Gilmour solo tone - smooth, sustaining, with rich harmonics and modulation. Hiwatt + Big Muff combination",
+      "equipment": {
+        "guitar": "Fender Stratocaster",
+        "amp": "Hiwatt DR103",
+        "cabinet": "WEM 4x12",
+        "pedals": [
+          "Big Muff Pi",
+          "MXR Dyna Comp",
+          "Electric Mistress Flanger"
+        ]
+      },
+      "parameters": {
+        "amp": {
+          "gain": 0.6,
+          "bass": 0.55,
+          "mid": 0.65,
+          "treble": 0.7,
+          "presence": 0.6,
+          "master": 0.8
+        },
+        "eq": {
+          "100Hz": -1.0,
+          "500Hz": 1.5,
+          "2kHz": 2.0,
+          "5kHz": 1.0
+        },
+        "effects": [
+          {
+            "effect_type": "fuzz",
+            "parameters": {
+              "sustain": 0.8,
+              "tone": 0.6,
+              "volume": 0.75
+            }
+          },
+          {
+            "effect_type": "compressor",
+            "parameters": {
+              "ratio": 0.5,
+              "attack": 0.2,
+              "release": 0.4
+            }
+          },
+          {
+            "effect_type": "flanger",
+            "parameters": {
+              "rate": 0.25,
+              "depth": 0.6,
+              "feedback": 0.4
+            }
+          }
+        ],
+        "reverb": {
+          "room_size": 0.35,
+          "mix": 0.18
+        },
+        "delay": {
+          "time": 0.45,
+          "feedback": 0.35,
+          "mix": 0.3
+        }
+      },
+      "techniques": [
+        "bending",
+        "vibrato",
+        "sustained notes",
+        "legato"
+      ],
+      "tags": [
+        "legendary",
+        "smooth",
+        "sustain",
+        "classic",
+        "emotional"
+      ]
+    },
+    {
+      "id": "death_symbolic_chuck_schuldiner",
+      "artist": "Death",
+      "album": "Symbolic",
+      "song": "Crystal Mountain",
+      "year": 1995,
+      "genre": "Death Metal",
+      "instrument": "guitar",
+      "description": "Technical death metal tone - tight, brutal, with clarity for complex riffing. Chuck Schuldiner's signature tone",
+      "equipment": {
+        "guitar": "B.C. Rich Stealth",
+        "amp": "Valvestate 8100",
+        "cabinet": "Marshall 4x12",
+        "pedals": [
+          "Boss MT-2 Metal Zone"
+        ]
+      },
+      "parameters": {
+        "amp": {
+          "gain": 0.9,
+          "bass": 0.5,
+          "mid": 0.45,
+          "treble": 0.8,
+          "presence": 0.75,
+          "master": 0.85
+        },
+        "eq": {
+          "80Hz": -3.0,
+          "200Hz": -2.0,
+          "800Hz": -3.0,
+          "2kHz": 2.0,
+          "5kHz": 3.0,
+          "8kHz": 1.5
+        },
+        "effects": [
+          {
+            "effect_type": "noise_gate",
+            "parameters": {
+              "threshold": 0.4,
+              "attack": 0.05,
+              "release": 0.15
+            }
+          },
+          {
+            "effect_type": "distortion",
+            "parameters": {
+              "dist": 0.7,
+              "high": 0.6,
+              "low": 0.4,
+              "level": 0.8
+            }
+          }
+        ],
+        "reverb": {
+          "room_size": 0.1,
+          "mix": 0.05
+        },
+        "delay": {}
+      },
+      "techniques": [
+        "tremolo picking",
+        "palm muting",
+        "alternate picking",
+        "standard tuning"
+      ],
+      "tags": [
+        "death metal",
+        "technical",
+        "brutal",
+        "tight",
+        "clarity"
+      ]
+    }
+  ]
+}

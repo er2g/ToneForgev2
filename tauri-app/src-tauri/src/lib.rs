@@ -1,1119 +1,516 @@
-mod ai_engine;
-mod ai_engine_tests;
+//! ToneForge v2 - Two-Tier AI Tone Generation System
+//!
+//! Architecture:
+//! - Tier 1 (Tone AI): Searches encyclopedia or generates tone recommendations
+//! - Tier 2 (Parameter AI): Maps tone parameters to REAPER with precision
+
+mod ai_client;
 mod audio;
 mod dsp;
 mod errors;
+mod parameter_ai;
 mod reaper_client;
 mod secure_storage;
-mod tone_researcher;
+mod tone_ai;
+mod tone_encyclopedia;
 mod undo_redo;
-mod xai_client;
 
+use ai_client::AIProvider;
 use audio::analyzer::{analyze_spectrum, AnalysisConfig};
 use audio::loader::{load_audio_file, resample_audio};
 use audio::matcher::{match_profiles, MatchConfig as EqMatchConfig, MatchResult as EqMatchResult};
 use audio::profile::{extract_eq_profile, EQProfile};
-use errors::{ErrorResponse, ToneForgeError};
+use parameter_ai::{ParameterAction, ParameterAI, ReaperParameter, ReaperPlugin, ReaperSnapshot};
 use reaper_client::ReaperClient;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::State;
-use tone_researcher::ToneResearcher;
-use undo_redo::{UndoAction, UndoActionSummary, UndoManager, UndoState};
-use xai_client::XaiClient;
+use tone_ai::{ToneAI, ToneAIResult, ToneSource};
+use tone_encyclopedia::ToneEncyclopedia;
+use undo_redo::{UndoManager, UndoState};
 
-const MAX_HISTORY: usize = 40;
-const PROMPT_HISTORY_LIMIT: usize = 12;
-const MAX_RECENT_TONES: usize = 20;
+const ENCYCLOPEDIA_PATH: &str = "tone_encyclopedia.json";
 
-/// Recent tone entry for quick access
-#[derive(Clone, Serialize, Deserialize)]
-struct RecentTone {
-    id: String,
-    query: String,
-    summary: String,
-    timestamp: u64,
-    track: i32,
-    changes_count: usize,
-}
-
-#[derive(Clone, Debug)]
-struct IntentResult {
-    label: String,
-    details: Vec<String>,
-    confidence: f32,
-}
-
-#[derive(Clone, Default)]
-struct ChainOfThought {
-    steps: Vec<String>,
-}
-
-impl ChainOfThought {
-    fn new() -> Self {
-        Self { steps: Vec::new() }
-    }
-
-    fn add_step<T: Into<String>>(&mut self, step: T) {
-        self.steps.push(step.into());
-    }
-
-    fn summarize(&self) -> String {
-        if self.steps.is_empty() {
-            return "No preliminary reasoning recorded.".to_string();
-        }
-        self.steps
-            .iter()
-            .enumerate()
-            .map(|(idx, step)| format!("{}. {}", idx + 1, step))
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-}
-
-#[derive(Clone, Default)]
-struct MemorySystem {
-    entries: Vec<ChatMessage>,
-    max_entries: usize,
-    feedback: Vec<String>,
-}
-
-impl MemorySystem {
-    fn from_history(history: Vec<ChatMessage>, max_entries: usize) -> Self {
-        let mut entries = history;
-        if entries.len() > max_entries {
-            let overflow = entries.len() - max_entries;
-            entries.drain(0..overflow);
-        }
-        Self {
-            entries,
-            max_entries,
-            feedback: Vec::new(),
-        }
-    }
-
-    fn summarize(&self) -> String {
-        if self.entries.is_empty() {
-            return "No prior conversation available.".to_string();
-        }
-        let mut summary = Vec::new();
-        for entry in self.entries.iter().rev().take(5).rev() {
-            summary.push(format!("{}: {}", entry.role, entry.content));
-        }
-        if !self.feedback.is_empty() {
-            summary.push(format!("Feedback loop: {}", self.feedback.join(" | ")));
-        }
-        summary.join("\n")
-    }
-
-    fn record_feedback<T: Into<String>>(&mut self, note: T) {
-        self.feedback.push(note.into());
-        if self.feedback.len() > 5 {
-            self.feedback.remove(0);
-        }
-    }
-}
-
-#[derive(Clone, Default)]
-struct LearningSystem {
-    preferences: HashMap<String, f64>,
-    feedback_log: Vec<String>,
-}
-
-impl LearningSystem {
-    fn ingest_feedback(&mut self, message: &str) {
-        let lowered = message.to_lowercase();
-        if lowered.contains("muddy") {
-            *self.preferences.entry("bass".into()).or_insert(0.5) -= 0.05;
-            self.feedback_log
-                .push("Detected 'muddy' feedback, biasing bass downward.".into());
-        }
-        if lowered.contains("harsh") || lowered.contains("bright") {
-            *self.preferences.entry("presence".into()).or_insert(0.5) -= 0.05;
-            self.feedback_log
-                .push("Detected harshness feedback, tempering presence.".into());
-        }
-    }
-
-    fn apply_memory(&mut self, memory: &MemorySystem) {
-        for entry in &memory.entries {
-            self.ingest_feedback(&entry.content);
-        }
-    }
-
-    fn summary(&self) -> String {
-        if self.preferences.is_empty() && self.feedback_log.is_empty() {
-            return "No learned preferences yet.".into();
-        }
-
-        let mut lines = Vec::new();
-        if !self.preferences.is_empty() {
-            lines.push("Learned parameter biases:".into());
-            for (key, value) in &self.preferences {
-                lines.push(format!("- {} → {:.2}", key, value));
-            }
-        }
-
-        if !self.feedback_log.is_empty() {
-            lines.push("Recent feedback notes:".into());
-            lines.extend(self.feedback_log.iter().cloned());
-        }
-
-        lines.join("\n")
-    }
-}
-
-#[derive(Clone, Default)]
-struct IntentDetector;
-
-impl IntentDetector {
-    fn detect(message: &str) -> IntentResult {
-        let mut details = Vec::new();
-        let mut confidence = 0.45;
-        let lower = message.to_lowercase();
-
-        if lower.contains("tone") || lower.contains("sound") {
-            details.push("Tone shaping request detected.".into());
-            confidence += 0.25;
-        }
-        if lower.contains("too bright") || lower.contains("too harsh") {
-            details.push("User complains about brightness/harshness.".into());
-            confidence += 0.15;
-        }
-        if lower.contains("muddy") || lower.contains("boomy") {
-            details.push("User complains about muddiness.".into());
-            confidence += 0.2;
-        }
-        if lower.contains("metallica") || lower.contains("master of puppets") {
-            details.push("Specific artist/album tone requested.".into());
-            confidence += 0.25;
-        }
-
-        IntentResult {
-            label: "ToneEngineering".into(),
-            details,
-            confidence: confidence.min(0.99),
-        }
-    }
-}
-
-#[derive(Default)]
-struct SelfCritique {
-    reflections: Vec<String>,
-}
-
-impl SelfCritique {
-    fn evaluate(plan: &AIPlan, diagnostics: &EngineDiagnostics) -> Option<Self> {
-        let mut reflections = Vec::new();
-        if plan.actions.is_empty() {
-            reflections.push("Plan contained no actions; ensure this is intentional.".into());
-        }
-        if !diagnostics.safety_warnings.is_empty() {
-            reflections.push("Safety warnings present; consider gentler parameter moves.".into());
-        }
-        if plan.changes_table.is_empty() {
-            reflections.push("No user-visible changes reported; double-check summary.".into());
-        }
-
-        if reflections.is_empty() {
-            return None;
-        }
-
-        Some(Self { reflections })
-    }
-
-    fn summarize(&self) -> String {
-        self.reflections
-            .iter()
-            .map(|note| format!("- {}", note))
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-}
-
-#[derive(Clone)]
-struct PromptPackage {
-    system_prompt: String,
-    user_prompt: String,
-}
-
-#[derive(Clone)]
-struct PromptBuilder {
-    base_system_prompt: String,
-    dynamic_rules: Vec<String>,
-    memory_summary: Option<String>,
-    learning_summary: Option<String>,
-    intent: Option<IntentResult>,
-    chain_of_thought: Option<ChainOfThought>,
-}
-
-impl PromptBuilder {
-    fn new(base: &str) -> Self {
-        Self {
-            base_system_prompt: base.to_string(),
-            dynamic_rules: Vec::new(),
-            memory_summary: None,
-            learning_summary: None,
-            intent: None,
-            chain_of_thought: None,
-        }
-    }
-
-    fn with_rule<T: Into<String>>(mut self, rule: T) -> Self {
-        self.dynamic_rules.push(rule.into());
-        self
-    }
-
-    fn with_memory<T: Into<String>>(mut self, summary: T) -> Self {
-        self.memory_summary = Some(summary.into());
-        self
-    }
-
-    fn with_learning<T: Into<String>>(mut self, summary: T) -> Self {
-        self.learning_summary = Some(summary.into());
-        self
-    }
-
-    fn with_intent(mut self, intent: IntentResult) -> Self {
-        self.intent = Some(intent);
-        self
-    }
-
-    fn with_chain(mut self, chain: ChainOfThought) -> Self {
-        self.chain_of_thought = Some(chain);
-        self
-    }
-
-    fn build(&self, payload: &PromptPayload) -> Result<PromptPackage, String> {
-        let context = serde_json::to_string_pretty(payload).map_err(|e| e.to_string())?;
-
-        let mut system_sections = vec![self.base_system_prompt.clone()];
-        if !self.dynamic_rules.is_empty() {
-            system_sections.push(format!("Dynamic rules:\n{}", self.dynamic_rules.join("\n")));
-        }
-
-        let mut user_sections = Vec::new();
-        user_sections.push(format!(
-            "ACTIVE TARGET TRACK: {} (override by setting 'track' explicitly if needed)",
-            payload.selected_track
-        ));
-
-        if let Some(ref intent) = self.intent {
-            user_sections.push(format!(
-                "Detected intent [{} | confidence {:.0}%]:\n{}",
-                intent.label,
-                intent.confidence * 100.0,
-                if intent.details.is_empty() {
-                    "No details".into()
-                } else {
-                    intent.details.join(" | ")
-                }
-            ));
-        }
-
-        if let Some(ref memory) = self.memory_summary {
-            user_sections.push(format!("Conversation memory:\n{}", memory));
-        }
-
-        if let Some(ref learning) = self.learning_summary {
-            user_sections.push(format!("Learned preferences:\n{}", learning));
-        }
-
-        if let Some(ref chain) = self.chain_of_thought {
-            user_sections.push(format!("Preliminary reasoning:\n{}", chain.summarize()));
-        }
-
-        if let Some(ref instructions) = payload.custom_instructions {
-            let trimmed = instructions.trim();
-            if !trimmed.is_empty() {
-                user_sections.push(format!("CUSTOM INSTRUCTIONS FROM USER:\n{}", trimmed));
-            }
-        }
-
-        if let Some(ref research) = payload.research_context {
-            user_sections.push(research.clone());
-        }
-
-        user_sections.push(format!(
-            "=== SNAPSHOT START ===\n{}\n=== SNAPSHOT END ===",
-            context
-        ));
-
-        Ok(PromptPackage {
-            system_prompt: system_sections.join("\n\n"),
-            user_prompt: user_sections.join("\n\n"),
-        })
-    }
-}
-
-// Helper to handle mutex poisoning gracefully
-fn lock_or_recover<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<T> {
-    mutex.lock().unwrap_or_else(|poisoned| {
-        eprintln!("⚠️  Mutex was poisoned, recovering...");
-        poisoned.into_inner()
-    })
-}
-
-const SYSTEM_PROMPT: &str = r#"
-You are GROK-TONE, an xAI Grok-powered autonomous tone engineer for guitar/bass production. Every request gives you the full REAPER snapshot (tracks, FX chain order, plugin enabled states, normalized parameter values, display values, units, and format hints) plus chat history and user custom instructions. Stay consistent: follow the rules below every time.
-
-=== BUILT-IN RESEARCH ===
-- You can leverage Grok's native web search. When tone knowledge is missing or outdated, propose a `web_search` action targeting amps, pedals, artists, or reference tracks.
-
-=== AVAILABLE TOOLS ===
-- set_param(track, fx_index, param_index, value, reason): change any parameter using normalized values; respect provided display/unit context.
-- toggle_fx(track, fx_index, enabled, reason): enable/disable plugins to route or bypass tone stages.
-- load_plugin(track, plugin_name, position?, reason): insert plugins where they help the chain.
-- remove_plugin(track, fx_index, reason): remove plugins that block, duplicate, or muddy the tone.
-- changes_table: fill this for the user with display-friendly values whenever you alter anything.
-- web_search(query, reason): use Grok's search to gather tone recipes or gear references.
-
-=== MONOTONIC RULES (ALWAYS APPLY) ===
-1) Hierarchical validation: never touch a parameter on a disabled plugin; enable it first.
-2) Respect the provided REAPER snapshot; target the selected track unless a different track is explicitly required.
-3) Prefer minimal, purposeful moves over random tweaks; explain the intent in `reason` fields.
-4) Keep summaries concise but clear; the actions array can be technical.
-5) If research_context is provided, treat it as authoritative. If not and data is missing, schedule a `web_search` instead of guessing.
-6) Return well-formed JSON with `summary`, `changes_table`, and `actions` that the engine can execute.
-
-=== RESPONSE CONTRACT ===
-{
-  "summary": "What you changed and why (human-readable)",
-  "changes_table": [{"plugin": "...", "parameter": "...", "old_value": "...", "new_value": "...", "reason": "..."}],
-  "actions": [
-    {"type": "set_param", "track": 0, "fx_index": 0, "param_index": 1, "value": 0.75, "reason": "..."},
-    {"type": "toggle_fx", "track": 0, "fx_index": 0, "enabled": true, "reason": "..."},
-    {"type": "load_plugin", "track": 0, "plugin_name": "...", "position": 1, "reason": "..."},
-    {"type": "remove_plugin", "track": 0, "fx_index": 2, "reason": "..."},
-    {"type": "web_search", "query": "...", "reason": "..."}
-  ]
-}
-
-changes_table is user-facing; actions are executable. Be technical in actions, approachable in the summary.
-"#;
-
-#[derive(Clone, Serialize, Deserialize)]
-struct ChatMessage {
-    role: String,
-    content: String,
-    timestamp: u64,
-}
-
-#[derive(Clone)]
-enum AIProvider {
-    Xai(XaiClient),
-}
-
-impl AIProvider {
-    async fn generate(&self, prompt: &str) -> Result<String, Box<dyn Error>> {
-        match self {
-            AIProvider::Xai(client) => client.generate(prompt).await,
-        }
-    }
-
-    async fn generate_chat(
-        &self,
-        system_prompt: &str,
-        history: &[ConversationEntry],
-        user_prompt: &str,
-    ) -> Result<String, Box<dyn Error>> {
-        match self {
-            AIProvider::Xai(client) => {
-                client
-                    .generate_chat(system_prompt, history, user_prompt)
-                    .await
-            }
-        }
-    }
-}
+// ==================== APP STATE ====================
 
 struct AppState {
     reaper: Mutex<ReaperClient>,
     ai_provider: Mutex<Option<AIProvider>>,
-    chat_history: Mutex<Vec<ChatMessage>>,
-    http_client: reqwest::Client, // Reusable HTTP client (no mutex needed - Clone is cheap)
-    tone_researcher: ToneResearcher, // First AI layer for internet research
-    undo_manager: Mutex<UndoManager>, // Undo/Redo system
-    recent_tones: Mutex<Vec<RecentTone>>, // Recent tone history
-    learning_system: Mutex<LearningSystem>, // Persistent learning preferences
+    tone_encyclopedia: Mutex<ToneEncyclopedia>,
+    undo_manager: Mutex<UndoManager>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-struct FxParamState {
-    index: i32,
-    name: String,
-    value: f64,
-    display: String,
-    unit: String,
-    format_hint: String,
+// ==================== TAURI COMMANDS ====================
+
+#[tauri::command]
+async fn check_reaper_connection(state: State<'_, AppState>) -> Result<bool, String> {
+    let reaper = state.reaper.lock().unwrap();
+    reaper.ping().await.map_err(|e| e.to_string())
 }
 
-#[derive(Clone, Serialize)]
-struct FxState {
-    index: i32,
-    name: String,
-    enabled: bool,
-    params: Vec<FxParamState>,
-}
-
-#[derive(Clone, Serialize)]
-struct TrackSnapshot {
-    index: i32,
-    name: String,
-    fx: Vec<FxState>,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-struct PresetParamState {
-    index: i32,
-    name: String,
-    value: f64,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-struct PresetFxState {
-    index: i32,
-    name: String,
-    params: Vec<PresetParamState>,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-struct PresetTrackState {
-    index: i32,
-    name: String,
-    fx: Vec<PresetFxState>,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-struct PresetFile {
-    name: String,
-    created_at: u64,
-    project_path: Option<String>,
-    tracks: Vec<PresetTrackState>,
-}
-
-#[derive(Serialize)]
-struct PromptPayload {
-    selected_track: i32,
-    tracks: Vec<TrackSnapshot>,
-    recent_messages: Vec<ConversationEntry>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    research_context: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    custom_instructions: Option<String>,
-}
-
-#[derive(Serialize, Clone)]
-pub struct ConversationEntry {
-    role: String,
-    content: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ChangeEntry {
-    plugin: String,
-    parameter: String,
-    old_value: String,
-    new_value: String,
-    reason: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ChatResponse {
-    summary: String,
-    changes_table: Vec<ChangeEntry>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    engine_report: Option<String>,
-    #[serde(default)]
-    action_log: Vec<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct AIPlan {
-    summary: String,
-    #[serde(default)]
-    changes_table: Vec<ChangeEntry>,
-    #[serde(default)]
-    actions: Vec<PlannedAction>,
-}
-
-#[derive(Default)]
-struct EngineDiagnostics {
-    conflicts: Vec<String>,
-    safety_warnings: Vec<String>,
-    suggestions: Vec<String>,
-    optimizations: Vec<String>,
-    preflight: Vec<String>,
-    focus_areas: Vec<String>,
-}
-
-impl EngineDiagnostics {
-    fn record_conflicts(&mut self, conflicts: Vec<String>) {
-        self.conflicts = conflicts;
-    }
-
-    fn push_safety_warning(&mut self, warning: String) {
-        self.safety_warnings.push(warning);
-    }
-
-    fn push_suggestion(&mut self, suggestion: String) {
-        self.suggestions.push(suggestion);
-    }
-
-    fn push_optimization(&mut self, note: String) {
-        self.optimizations.push(note);
-    }
-
-    fn push_preflight(&mut self, note: String) {
-        self.preflight.push(note);
-    }
-
-    fn push_focus(&mut self, focus: String) {
-        self.focus_areas.push(focus);
-    }
-
-    fn is_empty(&self) -> bool {
-        self.conflicts.is_empty()
-            && self.safety_warnings.is_empty()
-            && self.suggestions.is_empty()
-            && self.optimizations.is_empty()
-            && self.preflight.is_empty()
-            && self.focus_areas.is_empty()
-    }
-
-    fn to_report(&self) -> Option<String> {
-        if self.is_empty() {
-            return None;
-        }
-
-        let mut sections = Vec::new();
-
-        if !self.optimizations.is_empty() {
-            sections.push("Optimizations:".to_string());
-            sections.extend(self.optimizations.iter().map(|note| format!("- {}", note)));
-        }
-
-        if !self.preflight.is_empty() {
-            sections.push("Preflight readiness:".to_string());
-            sections.extend(self.preflight.iter().map(|note| format!("- {}", note)));
-        }
-
-        if !self.conflicts.is_empty() {
-            sections.push("Conflicts detected:".to_string());
-            sections.extend(
-                self.conflicts
-                    .iter()
-                    .map(|conflict| format!("- {}", conflict)),
-            );
-        }
-
-        if !self.safety_warnings.is_empty() {
-            sections.push("Safety warnings:".to_string());
-            sections.extend(
-                self.safety_warnings
-                    .iter()
-                    .map(|warn| format!("- {}", warn)),
-            );
-        }
-
-        if !self.suggestions.is_empty() {
-            sections.push("Tone compensations:".to_string());
-            sections.extend(self.suggestions.iter().map(|note| format!("- {}", note)));
-        }
-
-        if !self.focus_areas.is_empty() {
-            sections.push("Action focus:".to_string());
-            sections.extend(self.focus_areas.iter().map(|area| format!("- {}", area)));
-        }
-
-        Some(sections.join("\n"))
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type")]
-enum PlannedAction {
-    #[serde(rename = "set_param")]
-    SetParam {
-        track: i32,
-        fx_index: i32,
-        param_index: i32,
-        value: f64,
-        reason: Option<String>,
-    },
-    #[serde(rename = "toggle_fx")]
-    ToggleFx {
-        track: i32,
-        fx_index: i32,
-        enabled: bool,
-        reason: Option<String>,
-    },
-    #[serde(rename = "load_plugin")]
-    LoadPlugin {
-        track: i32,
-        plugin_name: String,
-        position: Option<i32>,
-        reason: Option<String>,
-    },
-    #[serde(rename = "remove_plugin")]
-    RemovePlugin {
-        track: i32,
-        fx_index: i32,
-        reason: Option<String>,
-    },
-    #[serde(rename = "web_search")]
-    WebSearch {
-        query: String,
-        reason: Option<String>,
-    },
-    #[serde(rename = "noop")]
-    Noop { reason: Option<String> },
-}
-
-fn current_timestamp() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
-fn push_history(history: &mut Vec<ChatMessage>, message: ChatMessage) {
-    history.push(message);
-    if history.len() > MAX_HISTORY {
-        let overflow = history.len() - MAX_HISTORY;
-        history.drain(0..overflow);
-    }
-}
-
-fn conversation_for_prompt(history: &[ChatMessage]) -> Vec<ConversationEntry> {
-    history
-        .iter()
-        .rev()
-        .take(PROMPT_HISTORY_LIMIT)
-        .cloned()
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .map(|msg| ConversationEntry {
-            role: msg.role,
-            content: msg.content,
-        })
-        .collect()
-}
-
-async fn collect_track_snapshots(reaper: &ReaperClient) -> Result<Vec<TrackSnapshot>, String> {
-    let overview = reaper.get_tracks().await.map_err(|e| e.to_string())?;
-    let mut tracks = Vec::new();
-    for track in overview.tracks.iter() {
-        let mut fx_states = Vec::new();
-        for fx in &track.fx_list {
-            let snapshot = reaper
-                .get_fx_params(track.index, fx.index)
-                .await
-                .map_err(|e| e.to_string())?;
-            let params = snapshot
-                .params
-                .into_iter()
-                .map(|entry| FxParamState {
-                    index: entry.index,
-                    name: entry.name,
-                    value: entry.value,
-                    display: entry.display,
-                    unit: entry.unit,
-                    format_hint: entry.format_hint,
-                })
-                .collect();
-            fx_states.push(FxState {
-                index: fx.index,
-                name: fx.name.clone(),
-                enabled: fx.enabled,
-                params,
-            });
-        }
-        tracks.push(TrackSnapshot {
-            index: track.index,
-            name: track.name.clone(),
-            fx: fx_states,
-        });
-    }
-    Ok(tracks)
-}
-
-fn extract_json_block(text: &str) -> String {
-    let trimmed = text.trim();
-    if trimmed.starts_with("```") {
-        let without_ticks = trimmed
-            .trim_start_matches("```json")
-            .trim_start_matches("```JSON")
-            .trim_start_matches("```")
-            .trim();
-        return without_ticks.trim_end_matches("```").trim().to_string();
-    }
-    if trimmed.starts_with('{') {
-        return trimmed.to_string();
-    }
-    if let Some(start) = trimmed.find('{') {
-        if let Some(end) = trimmed.rfind('}') {
-            return trimmed[start..=end].to_string();
-        }
-    }
-    trimmed.to_string()
-}
-
-fn parse_plan(raw: &str) -> Result<AIPlan, String> {
-    if let Ok(plan) = serde_json::from_str::<AIPlan>(raw) {
-        return Ok(plan);
-    }
-    let candidate = extract_json_block(raw);
-    serde_json::from_str(&candidate).map_err(|e| format!("Failed to parse AI JSON: {}", e))
-}
-
-fn normalize_action_track(
-    action: PlannedAction,
-    selected_track: i32,
-    available_tracks: &HashSet<i32>,
-) -> PlannedAction {
-    let map_track = |track: i32| -> i32 {
-        if available_tracks.contains(&track) {
-            track
-        } else {
-            selected_track
-        }
+#[tauri::command]
+async fn configure_ai_provider(
+    provider_name: String,
+    model: String,
+    api_key: String,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let provider = match provider_name.to_lowercase().as_str() {
+        "openai" | "gpt" => AIProvider::openai(api_key, model.clone()),
+        "claude" | "anthropic" => AIProvider::claude(api_key, model.clone()),
+        "gemini" | "google" => AIProvider::gemini(api_key, model.clone()),
+        "grok" | "xai" => AIProvider::grok(api_key, model.clone()),
+        _ => return Err(format!("Unsupported provider: {}", provider_name)),
     };
 
-    match action {
-        PlannedAction::SetParam {
-            track,
-            fx_index,
-            param_index,
-            value,
-            reason,
-        } => PlannedAction::SetParam {
-            track: map_track(track),
-            fx_index,
-            param_index,
-            value,
-            reason,
-        },
-        PlannedAction::ToggleFx {
-            track,
-            fx_index,
-            enabled,
-            reason,
-        } => PlannedAction::ToggleFx {
-            track: map_track(track),
-            fx_index,
-            enabled,
-            reason,
-        },
-        PlannedAction::LoadPlugin {
-            track,
-            plugin_name,
-            position,
-            reason,
-        } => PlannedAction::LoadPlugin {
-            track: map_track(track),
-            plugin_name,
-            position,
-            reason,
-        },
-        PlannedAction::RemovePlugin {
-            track,
-            fx_index,
-            reason,
-        } => PlannedAction::RemovePlugin {
-            track: map_track(track),
-            fx_index,
-            reason,
-        },
-        other => other,
-    }
-}
+    let mut guard = state.ai_provider.lock().unwrap();
+    *guard = Some(provider.clone());
 
-fn find_track<'a>(tracks: &'a [TrackSnapshot], track_idx: i32) -> Option<&'a TrackSnapshot> {
-    tracks.iter().find(|t| t.index == track_idx)
-}
-
-fn find_fx<'a>(track: &'a TrackSnapshot, fx_idx: i32) -> Option<&'a FxState> {
-    track.fx.iter().find(|fx| fx.index == fx_idx)
-}
-
-fn find_param<'a>(fx: &'a FxState, param_idx: i32) -> Option<&'a FxParamState> {
-    fx.params.iter().find(|p| p.index == param_idx)
-}
-
-fn category_label(category: ai_engine::ParameterCategory) -> &'static str {
-    match category {
-        ai_engine::ParameterCategory::Distortion => "Distortion",
-        ai_engine::ParameterCategory::EQ => "EQ",
-        ai_engine::ParameterCategory::Dynamics => "Dynamics",
-        ai_engine::ParameterCategory::Modulation => "Modulation",
-        ai_engine::ParameterCategory::Delay => "Delay",
-        ai_engine::ParameterCategory::Reverb => "Reverb",
-        ai_engine::ParameterCategory::Filter => "Filter",
-        ai_engine::ParameterCategory::Volume => "Volume",
-        ai_engine::ParameterCategory::Toggle => "Toggle",
-        ai_engine::ParameterCategory::Unknown => "Unknown",
-    }
-}
-
-async fn perform_web_search(client: &reqwest::Client, query: &str) -> Result<String, String> {
-    let search_url = format!(
-        "https://html.duckduckgo.com/html/?q={}",
-        urlencoding::encode(query)
-    );
-
-    let response = client
-        .get(&search_url)
-        .header(
-            "User-Agent",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        )
-        .send()
-        .await
-        .map_err(|e| format!("Web search failed: {}", e))?;
-
-    let html = response.text().await.map_err(|e| e.to_string())?;
-
-    // Simple extraction: get first 500 chars of HTML as context
-    // In production, you'd parse this properly or use a search API
-    let preview = html.chars().take(1000).collect::<String>();
     Ok(format!(
-        "Search results preview for '{}': {}",
-        query, preview
+        "{} configured with model {}",
+        provider.name(),
+        provider.model_name()
     ))
 }
 
-fn build_action_reason(action: &ai_engine::ActionPlan, tracks: &[TrackSnapshot]) -> String {
-    if let Some(track_state) = find_track(tracks, action.track) {
-        if let Some(fx_state) = find_fx(track_state, action.fx_index) {
-            if let Some(param_state) = find_param(fx_state, action.param_index) {
-                return format!(
-                    "Set '{}' on '{}' to {:.3} (was {:.3})",
-                    param_state.name, fx_state.name, action.value, param_state.value
-                );
-            }
+#[tauri::command]
+async fn process_tone_request(
+    message: String,
+    track: Option<i32>,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    println!("\n========== TWO-TIER AI PIPELINE START ==========");
+    println!("[USER] {}", message);
+
+    let track_idx = track.unwrap_or(0);
+
+    // Get AI provider
+    let ai_provider = {
+        let guard = state.ai_provider.lock().unwrap();
+        guard
+            .clone()
+            .ok_or_else(|| "AI provider not configured".to_string())?
+    };
+
+    // ========== TIER 1: TONE AI ==========
+    println!("\n[TIER 1] Running Tone AI...");
+
+    let tone_ai = {
+        let encyclopedia = state.tone_encyclopedia.lock().unwrap().clone();
+        ToneAI::new(encyclopedia).with_ai_provider(ai_provider.clone())
+    };
+
+    let tone_result = tone_ai
+        .process_request(&message)
+        .await
+        .map_err(|e| format!("Tone AI error: {}", e))?;
+
+    println!("[TIER 1] Result:");
+    println!("  - Source: {:?}", tone_result.source);
+    println!("  - Description: {}", tone_result.tone_description);
+    println!("  - Confidence: {:.0}%", tone_result.confidence * 100.0);
+
+    // ========== GET REAPER SNAPSHOT ==========
+    println!("\n[REAPER] Fetching current state...");
+
+    let reaper_snapshot = {
+        let reaper = state.reaper.lock().unwrap();
+        collect_reaper_snapshot(&reaper, track_idx)
+            .await
+            .map_err(|e| format!("Failed to get REAPER state: {}", e))?
+    };
+
+    println!("[REAPER] Track: {}", reaper_snapshot.track_name);
+    println!("[REAPER] Plugins: {}", reaper_snapshot.plugins.len());
+
+    // ========== TIER 2: PARAMETER AI ==========
+    println!("\n[TIER 2] Running Parameter AI...");
+
+    let parameter_ai = ParameterAI::new(ai_provider);
+
+    let parameter_result = parameter_ai
+        .map_parameters(
+            &tone_result.parameters,
+            &reaper_snapshot,
+            &tone_result.tone_description,
+        )
+        .await
+        .map_err(|e| format!("Parameter AI error: {}", e))?;
+
+    println!("[TIER 2] Generated {} actions", parameter_result.actions.len());
+    println!("[TIER 2] Summary: {}", parameter_result.summary);
+
+    if !parameter_result.warnings.is_empty() {
+        println!("[TIER 2] Warnings:");
+        for warning in &parameter_result.warnings {
+            println!("  ⚠️  {}", warning);
         }
     }
 
-    "Set parameter to new value".into()
+    // ========== VALIDATE ACTIONS ==========
+    let validation_warnings = parameter_ai.validate_actions(&parameter_result.actions, &reaper_snapshot);
+
+    if !validation_warnings.is_empty() {
+        println!("\n[VALIDATION] Warnings:");
+        for warning in &validation_warnings {
+            println!("  ⚠️  {}", warning);
+        }
+    }
+
+    // ========== RECORD FOR UNDO ==========
+    {
+        let mut undo_manager = state.undo_manager.lock().unwrap();
+        undo_manager.begin_action(&format!("Tone: {}", message));
+    }
+
+    // ========== APPLY ACTIONS TO REAPER ==========
+    println!("\n[APPLY] Applying actions to REAPER...");
+
+    let action_logs = {
+        let reaper = state.reaper.lock().unwrap();
+        apply_parameter_actions(&reaper, &parameter_result.actions, &reaper_snapshot, &mut state.undo_manager.lock().unwrap())
+            .await
+            .map_err(|e| format!("Failed to apply actions: {}", e))?
+    };
+
+    for log in &action_logs {
+        println!("[ACTION] {}", log);
+    }
+
+    // ========== COMMIT UNDO ==========
+    {
+        let mut undo_manager = state.undo_manager.lock().unwrap();
+        if let Some(action_id) = undo_manager.commit_action() {
+            println!("[UNDO] Recorded action: {}", action_id);
+        }
+    }
+
+    println!("\n========== TWO-TIER AI PIPELINE COMPLETE ==========\n");
+
+    // Build response
+    let response = ToneResponse {
+        tone_source: format!("{:?}", tone_result.source),
+        tone_description: tone_result.tone_description,
+        confidence: tone_result.confidence,
+        summary: parameter_result.summary,
+        actions_count: parameter_result.actions.len(),
+        action_logs,
+        warnings: parameter_result.warnings,
+        validation_warnings,
+    };
+
+    serde_json::to_string(&response).map_err(|e| e.to_string())
 }
 
-async fn apply_actions(
+#[derive(Serialize)]
+struct ToneResponse {
+    tone_source: String,
+    tone_description: String,
+    confidence: f32,
+    summary: String,
+    actions_count: usize,
+    action_logs: Vec<String>,
+    warnings: Vec<String>,
+    validation_warnings: Vec<String>,
+}
+
+// ==================== REAPER SNAPSHOT COLLECTION ====================
+
+async fn collect_reaper_snapshot(
     reaper: &ReaperClient,
-    http_client: &reqwest::Client,
-    tracks: &[TrackSnapshot],
-    actions: &[PlannedAction],
-) -> Result<Vec<String>, String> {
+    track_idx: i32,
+) -> Result<ReaperSnapshot, Box<dyn Error>> {
+    let overview = reaper.get_tracks().await?;
+
+    let track = overview
+        .tracks
+        .iter()
+        .find(|t| t.index == track_idx)
+        .ok_or_else(|| format!("Track {} not found", track_idx))?;
+
+    let mut plugins = Vec::new();
+
+    for fx in &track.fx_list {
+        let params_snapshot = reaper.get_fx_params(track_idx, fx.index).await?;
+
+        let parameters: Vec<ReaperParameter> = params_snapshot
+            .params
+            .into_iter()
+            .map(|p| ReaperParameter {
+                index: p.index,
+                name: p.name,
+                current_value: p.value,
+                display_value: p.display,
+            })
+            .collect();
+
+        plugins.push(ReaperPlugin {
+            index: fx.index,
+            name: fx.name.clone(),
+            enabled: fx.enabled,
+            parameters,
+        });
+    }
+
+    Ok(ReaperSnapshot {
+        track_index: track_idx,
+        track_name: track.name.clone(),
+        plugins,
+    })
+}
+
+// ==================== APPLY PARAMETER ACTIONS ====================
+
+async fn apply_parameter_actions(
+    reaper: &ReaperClient,
+    actions: &[ParameterAction],
+    snapshot: &ReaperSnapshot,
+    undo_manager: &mut UndoManager,
+) -> Result<Vec<String>, Box<dyn Error>> {
     let mut logs = Vec::new();
+
     for action in actions {
         match action {
-            PlannedAction::SetParam {
+            ParameterAction::SetParameter {
                 track,
-                fx_index,
+                plugin_index,
                 param_index,
+                param_name,
                 value,
                 reason,
             } => {
-                if let Some(track_state) = find_track(tracks, *track) {
-                    if let Some(fx_state) = find_fx(track_state, *fx_index) {
-                        // HIERARCHICAL VALIDATION: Check if FX is enabled
-                        if !fx_state.enabled {
-                            logs.push(format!(
-                                "⚠️  Plugin '{}' is DISABLED. Enabling it first...",
-                                fx_state.name
-                            ));
-                            reaper
-                                .set_fx_enabled(*track, *fx_index, true)
-                                .await
-                                .map_err(|e| e.to_string())?;
-                            logs.push(format!("✓ Enabled '{}'", fx_state.name));
-                        }
+                // Find current value for undo
+                if let Some(plugin) = snapshot.plugins.iter().find(|p| p.index == *plugin_index) {
+                    if let Some(param) = plugin.parameters.iter().find(|p| p.index == *param_index) {
+                        // Record for undo
+                        undo_manager.record_param_change(
+                            *track,
+                            *plugin_index,
+                            *param_index,
+                            param_name,
+                            param.current_value,
+                            *value,
+                        );
 
-                        if let Some(param_state) = find_param(fx_state, *param_index) {
-                            let old_value = param_state.display.clone();
+                        // Apply change
+                        reaper.set_param(*track, *plugin_index, param_name, *value).await?;
 
-                            reaper
-                                .set_param(*track, *fx_index, &param_state.name, *value)
-                                .await
-                                .map_err(|e| e.to_string())?;
-
-                            logs.push(format!(
-                                "✓ {} :: {} -> {} = {:.1}% ({})",
-                                track_state.name,
-                                fx_state.name,
-                                param_state.name,
-                                value * 100.0,
-                                reason.clone().unwrap_or_else(|| "no reason".into())
-                            ));
-
-                            // POST-ACTION VERIFICATION: Re-fetch the parameter to confirm
-                            match reaper.get_fx_params(*track, *fx_index).await {
-                                Ok(updated_snapshot) => {
-                                    if let Some(updated_param) = updated_snapshot
-                                        .params
-                                        .iter()
-                                        .find(|p| p.index == *param_index)
-                                    {
-                                        logs.push(format!(
-                                            "  ↳ Verified: {} → {} (was: {})",
-                                            param_state.name, updated_param.display, old_value
-                                        ));
-                                    }
-                                }
-                                Err(e) => {
-                                    logs.push(format!("  ⚠️  Could not verify change: {}", e));
-                                }
-                            }
-                        } else {
-                            logs.push(format!(
-                                "⚠️  Skipped set_param: param {} not found on {}",
-                                param_index, fx_state.name
-                            ));
-                        }
-                    } else {
                         logs.push(format!(
-                            "⚠️  Skipped set_param: fx {} not found on track {}",
-                            fx_index, track_state.name
+                            "✓ {} :: {} = {:.1}% (was {:.1}%) - {}",
+                            plugin.name,
+                            param_name,
+                            value * 100.0,
+                            param.current_value * 100.0,
+                            reason
                         ));
                     }
-                } else {
-                    logs.push(format!("⚠️  Skipped set_param: track {} missing", track));
                 }
             }
-            PlannedAction::ToggleFx {
+            ParameterAction::EnablePlugin {
                 track,
-                fx_index,
-                enabled,
+                plugin_index,
+                plugin_name,
                 reason,
             } => {
-                reaper
-                    .set_fx_enabled(*track, *fx_index, *enabled)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                logs.push(format!(
-                    "✓ Track {} FX {} toggled to {} ({})",
-                    track,
-                    fx_index,
-                    enabled,
-                    reason.clone().unwrap_or_else(|| "no reason".into())
-                ));
-
-                // POST-ACTION VERIFICATION: Re-fetch tracks to confirm
-                match reaper.get_tracks().await {
-                    Ok(overview) => {
-                        if let Some(t) = overview.tracks.iter().find(|t| t.index == *track) {
-                            if let Some(fx) = t.fx_list.iter().find(|f| f.index == *fx_index) {
-                                logs.push(format!(
-                                    "  ↳ Verified: '{}' is now {}",
-                                    fx.name,
-                                    if fx.enabled { "ENABLED" } else { "DISABLED" }
-                                ));
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        logs.push(format!("  ⚠️  Could not verify toggle: {}", e));
-                    }
+                // Find current state for undo
+                if let Some(plugin) = snapshot.plugins.iter().find(|p| p.index == *plugin_index) {
+                    undo_manager.record_fx_toggle(*track, *plugin_index, plugin_name, plugin.enabled);
                 }
+
+                reaper.set_fx_enabled(*track, *plugin_index, true).await?;
+
+                logs.push(format!("✓ Enabled '{}' - {}", plugin_name, reason));
             }
-            PlannedAction::LoadPlugin {
+            ParameterAction::LoadPlugin {
                 track,
                 plugin_name,
-                position: _,
                 reason,
+                ..
             } => {
-                let slot = reaper
-                    .add_plugin(*track, plugin_name)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                logs.push(format!(
-                    "✓ Loaded '{}' on track {} slot {} ({})",
-                    plugin_name,
-                    track,
-                    slot,
-                    reason.clone().unwrap_or_else(|| "no reason".into())
-                ));
+                let slot = reaper.add_plugin(*track, plugin_name).await?;
 
-                // POST-ACTION VERIFICATION: Check if plugin loaded
-                match reaper.get_tracks().await {
-                    Ok(overview) => {
-                        if let Some(t) = overview.tracks.iter().find(|t| t.index == *track) {
-                            if let Some(fx) = t.fx_list.iter().find(|f| f.index == slot) {
-                                logs.push(format!(
-                                    "  ↳ Verified: '{}' loaded at slot {} (enabled: {})",
-                                    fx.name, slot, fx.enabled
-                                ));
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        logs.push(format!("  ⚠️  Could not verify load: {}", e));
-                    }
-                }
-            }
-            PlannedAction::RemovePlugin {
-                track,
-                fx_index,
-                reason,
-            } => {
-                reaper
-                    .remove_plugin(*track, *fx_index)
-                    .await
-                    .map_err(|e| e.to_string())?;
                 logs.push(format!(
-                    "✓ Removed plugin at track {} slot {} ({})",
-                    track,
-                    fx_index,
-                    reason.clone().unwrap_or_else(|| "no reason".into())
-                ));
-
-                match reaper.get_tracks().await {
-                    Ok(overview) => {
-                        if let Some(t) = overview.tracks.iter().find(|t| t.index == *track) {
-                            if t.fx_list.iter().all(|fx| fx.index != *fx_index) {
-                                logs.push("  ↳ Verified: slot cleared".to_string());
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        logs.push(format!("  ⚠️  Could not verify removal: {}", e));
-                    }
-                }
-            }
-            PlannedAction::WebSearch { query, reason } => {
-                logs.push(format!(
-                    "🔍 Researching: '{}' ({})",
-                    query,
-                    reason.clone().unwrap_or_else(|| "gathering info".into())
-                ));
-                match perform_web_search(http_client, query).await {
-                    Ok(result) => {
-                        logs.push(format!(
-                            "  ✓ Search completed: {}",
-                            &result[..200.min(result.len())]
-                        ));
-                    }
-                    Err(e) => {
-                        logs.push(format!("  ⚠️  Search failed: {}", e));
-                    }
-                }
-            }
-            PlannedAction::Noop { reason } => {
-                logs.push(format!(
-                    "ℹ️  No action: {}",
-                    reason.clone().unwrap_or_else(|| "no changes needed".into())
+                    "✓ Loaded '{}' at slot {} - {}",
+                    plugin_name, slot, reason
                 ));
             }
         }
     }
+
     Ok(logs)
 }
+
+// ==================== ENCYCLOPEDIA MANAGEMENT ====================
+
+#[tauri::command]
+async fn load_encyclopedia(path: String, state: State<'_, AppState>) -> Result<String, String> {
+    let encyclopedia = ToneEncyclopedia::load_from_file(&path)?;
+
+    let count = encyclopedia.count();
+
+    let mut guard = state.tone_encyclopedia.lock().unwrap();
+    *guard = encyclopedia;
+
+    Ok(format!("Loaded {} tones from encyclopedia", count))
+}
+
+#[tauri::command]
+async fn get_encyclopedia_stats(state: State<'_, AppState>) -> Result<String, String> {
+    let encyclopedia = state.tone_encyclopedia.lock().unwrap();
+
+    let stats = serde_json::json!({
+        "total_tones": encyclopedia.count(),
+        "genres": encyclopedia.get_all_genres(),
+        "artists": encyclopedia.get_all_artists(),
+    });
+
+    serde_json::to_string(&stats).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn search_encyclopedia(
+    query: String,
+    limit: Option<usize>,
+    state: State<'_, AppState>,
+) -> Result<String, String> {
+    let encyclopedia = state.tone_encyclopedia.lock().unwrap();
+
+    let results = encyclopedia.search(&query, limit.unwrap_or(10));
+
+    #[derive(Serialize)]
+    struct SearchResultResponse {
+        id: String,
+        artist: String,
+        album: Option<String>,
+        song: Option<String>,
+        description: String,
+        score: f32,
+        matched_fields: Vec<String>,
+    }
+
+    let response: Vec<SearchResultResponse> = results
+        .into_iter()
+        .map(|r| SearchResultResponse {
+            id: r.tone.id.clone(),
+            artist: r.tone.artist.clone(),
+            album: r.tone.album.clone(),
+            song: r.tone.song.clone(),
+            description: r.tone.description.clone(),
+            score: r.score,
+            matched_fields: r.matched_fields,
+        })
+        .collect();
+
+    serde_json::to_string(&response).map_err(|e| e.to_string())
+}
+
+// ==================== UNDO/REDO COMMANDS ====================
+
+#[tauri::command]
+fn get_undo_state(state: State<'_, AppState>) -> Result<String, String> {
+    let manager = state.undo_manager.lock().unwrap();
+    let undo_state = UndoState::from(&*manager);
+    serde_json::to_string(&undo_state).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn perform_undo(state: State<'_, AppState>) -> Result<String, String> {
+    let action = {
+        let mut manager = state.undo_manager.lock().unwrap();
+        manager.pop_undo()
+    };
+
+    let Some(action) = action else {
+        return Err("Nothing to undo".to_string());
+    };
+
+    let reaper = state.reaper.lock().unwrap();
+
+    // Apply inverse of each change
+    for change in &action.parameter_changes {
+        if let Err(e) = reaper
+            .set_param(
+                change.track,
+                change.fx_index,
+                &change.param_name,
+                change.old_value,
+            )
+            .await
+        {
+            eprintln!("[UNDO] Failed to revert param: {}", e);
+        }
+    }
+
+    for toggle in &action.fx_toggles {
+        if let Err(e) = reaper
+            .set_fx_enabled(toggle.track, toggle.fx_index, toggle.was_enabled)
+            .await
+        {
+            eprintln!("[UNDO] Failed to revert toggle: {}", e);
+        }
+    }
+
+    // Move action to redo stack
+    {
+        let mut manager = state.undo_manager.lock().unwrap();
+        manager.push_redo(action.clone());
+    }
+
+    Ok(format!("Undone: {}", action.description))
+}
+
+#[tauri::command]
+async fn perform_redo(state: State<'_, AppState>) -> Result<String, String> {
+    let action = {
+        let mut manager = state.undo_manager.lock().unwrap();
+        manager.pop_redo()
+    };
+
+    let Some(action) = action else {
+        return Err("Nothing to redo".to_string());
+    };
+
+    let reaper = state.reaper.lock().unwrap();
+
+    // Re-apply each change
+    for change in &action.parameter_changes {
+        if let Err(e) = reaper
+            .set_param(
+                change.track,
+                change.fx_index,
+                &change.param_name,
+                change.new_value,
+            )
+            .await
+        {
+            eprintln!("[REDO] Failed to reapply param: {}", e);
+        }
+    }
+
+    for toggle in &action.fx_toggles {
+        if let Err(e) = reaper
+            .set_fx_enabled(toggle.track, toggle.fx_index, !toggle.was_enabled)
+            .await
+        {
+            eprintln!("[REDO] Failed to reapply toggle: {}", e);
+        }
+    }
+
+    // Move action back to undo stack
+    {
+        let mut manager = state.undo_manager.lock().unwrap();
+        manager.push_undo(action.clone());
+    }
+
+    Ok(format!("Redone: {}", action.description))
+}
+
+// ==================== AUDIO ANALYSIS (EQ MATCH) ====================
 
 #[tauri::command]
 async fn load_reference_audio(path: String) -> Result<EQProfile, String> {
@@ -1145,935 +542,7 @@ async fn calculate_eq_match(
     Ok(match_profiles(&reference, &input, &config))
 }
 
-#[tauri::command]
-async fn export_eq_settings(result: EqMatchResult, format: String) -> Result<String, String> {
-    match format.as_str() {
-        "reaper" => export_as_reaper_preset(&result.correction_profile),
-        "json" => {
-            serde_json::to_string_pretty(&result.correction_profile).map_err(|e| e.to_string())
-        }
-        "txt" => export_as_text(&result.correction_profile),
-        _ => Err("Unknown format".to_string()),
-    }
-}
-
-fn export_as_reaper_preset(profile: &EQProfile) -> Result<String, String> {
-    let mut output = String::from("<FXCHAIN\n");
-    output.push_str("WNDRECT 0 0 0 0\n");
-    output.push_str("SHOW 0\n");
-    output.push_str("LASTSEL 0\n");
-    output.push_str("DOCKED 0\n");
-    output.push_str("<VST \"VST: ReaEQ (Cockos)\" ReaEQ 0 \"\" 1919247729\n");
-
-    for (i, band) in profile.bands.iter().enumerate().take(10) {
-        let base_param = i * 5;
-        output.push_str(&format!("  {} 1.0\n", base_param));
-
-        let freq_norm =
-            (band.frequency.log2() - 20.0f32.log2()) / (20_000.0f32.log2() - 20.0f32.log2());
-        output.push_str(&format!("  {} {}\n", base_param + 1, freq_norm));
-
-        let gain_norm = (band.gain_db + 18.0) / 36.0;
-        output.push_str(&format!("  {} {}\n", base_param + 2, gain_norm));
-
-        output.push_str(&format!("  {} 0.5\n", base_param + 3));
-        output.push_str(&format!("  {} 0.4\n", base_param + 4));
-    }
-
-    output.push_str(">\n");
-    output.push_str("FLOATPOS 0 0 0 0\n");
-    output.push_str("FXID {GUID}\n");
-    output.push_str("WAK 0 0\n");
-    output.push_str(">\n");
-
-    Ok(output)
-}
-
-fn export_as_text(profile: &EQProfile) -> Result<String, String> {
-    let mut output = String::from("EQ Settings:\n\n");
-    for band in &profile.bands {
-        output.push_str(&format!(
-            "{:>6} Hz: {:>+6.2} dB (Q: {:.2})\n",
-            band.frequency as i32,
-            band.gain_db,
-            calculate_q_from_bandwidth(band.frequency, band.bandwidth)
-        ));
-    }
-    Ok(output)
-}
-
-fn calculate_q_from_bandwidth(center_freq: f32, bandwidth: f32) -> f32 {
-    center_freq / bandwidth
-}
-
-#[tauri::command]
-async fn check_reaper_connection(state: State<'_, AppState>) -> Result<bool, String> {
-    let reaper = { lock_or_recover(&state.reaper).clone() };
-    reaper.ping().await.map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn configure_ai_provider(
-    provider: String,
-    model: String,
-    api_key: String,
-    state: State<'_, AppState>,
-) -> Result<String, String> {
-    let provider_key = provider.to_lowercase();
-    let ai_provider = match provider_key.as_str() {
-        "xai" | "grok" => AIProvider::Xai(XaiClient::new(api_key, model.clone())),
-        _ => return Err(format!("Unsupported provider: {}", provider)),
-    };
-
-    {
-        let mut guard = lock_or_recover(&state.ai_provider);
-        *guard = Some(ai_provider);
-    }
-
-    {
-        let mut history = lock_or_recover(&state.chat_history);
-        history.clear();
-    }
-
-    Ok(format!("{} configured (model: {})", provider, model))
-}
-
-#[tauri::command]
-fn get_chat_history(state: State<'_, AppState>) -> Result<String, String> {
-    let history = lock_or_recover(&state.chat_history);
-    serde_json::to_string(&*history).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn process_chat_message(
-    message: String,
-    track: Option<i32>,
-    custom_instructions: Option<String>,
-    state: State<'_, AppState>,
-) -> Result<String, String> {
-    let ai_provider = {
-        let guard = lock_or_recover(&state.ai_provider);
-        guard
-            .clone()
-            .ok_or_else(|| "AI provider is not configured".to_string())?
-    };
-
-    let track_idx = track.unwrap_or(0).max(0);
-
-    {
-        let mut history = lock_or_recover(&state.chat_history);
-        push_history(
-            &mut history,
-            ChatMessage {
-                role: "user".into(),
-                content: message.clone(),
-                timestamp: current_timestamp(),
-            },
-        );
-    }
-
-    let reaper = { lock_or_recover(&state.reaper).clone() };
-    let tracks_snapshot = collect_track_snapshots(&reaper).await?;
-
-    let history_snapshot = {
-        let history = lock_or_recover(&state.chat_history);
-        conversation_for_prompt(&history)
-    };
-
-    let full_history = {
-        let history = lock_or_recover(&state.chat_history);
-        history.clone()
-    };
-
-    let mut memory_system = MemorySystem::from_history(full_history, MAX_HISTORY);
-    let intent = IntentDetector::detect(&message);
-    let mut chain_of_thought = ChainOfThought::new();
-    let intent_details = if intent.details.is_empty() {
-        "No details".to_string()
-    } else {
-        intent.details.join(" | ")
-    };
-    chain_of_thought.add_step(format!(
-        "Intent [{} | {:.0}%]: {}",
-        intent.label,
-        intent.confidence * 100.0,
-        intent_details
-    ));
-
-    {
-        let mut learning = lock_or_recover(&state.learning_system);
-        learning.apply_memory(&memory_system);
-        learning.ingest_feedback(&message);
-        memory_system.record_feedback(learning.summary());
-    }
-
-    // ========== TONE RESEARCH LAYER (First AI Layer) ==========
-    // Detect if user is requesting a specific tone and research it from the internet
-    let research_context =
-        if let Some(tone_request) = state.tone_researcher.detect_tone_request(&message) {
-            println!("[TONE RESEARCH] Detected tone request: {:?}", tone_request);
-
-            match state.tone_researcher.research_tone(&tone_request).await {
-                Ok(tone_info) => {
-                    println!(
-                        "[TONE RESEARCH] Research successful! Confidence: {:.0}%",
-                        tone_info.confidence * 100.0
-                    );
-                    let formatted = state.tone_researcher.format_for_ai(&tone_info);
-                    Some(formatted)
-                }
-                Err(e) => {
-                    println!("[TONE RESEARCH] Research failed: {}", e);
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
-    if research_context.is_some() {
-        chain_of_thought.add_step("Research context detected and attached.".to_string());
-    }
-
-    let payload = PromptPayload {
-        selected_track: track_idx,
-        tracks: tracks_snapshot.clone(),
-        recent_messages: history_snapshot,
-        research_context,
-        custom_instructions,
-    };
-
-    let learning_snapshot = {
-        let learning = lock_or_recover(&state.learning_system);
-        learning.summary()
-    };
-
-    let prompt_builder = PromptBuilder::new(SYSTEM_PROMPT)
-        .with_rule("Always execute hierarchical validation before modifications.")
-        .with_memory(memory_system.summarize())
-        .with_learning(learning_snapshot)
-        .with_intent(intent)
-        .with_chain(chain_of_thought);
-
-    let prompt_package = prompt_builder.build(&payload)?;
-
-    let ai_text = ai_provider
-        .generate_chat(
-            &prompt_package.system_prompt,
-            &payload.recent_messages,
-            &prompt_package.user_prompt,
-        )
-        .await
-        .map_err(|e| e.to_string())?;
-    let mut plan = parse_plan(&ai_text)?;
-
-    let mut diagnostics = EngineDiagnostics::default();
-
-    let available_tracks: HashSet<i32> = tracks_snapshot.iter().map(|t| t.index).collect();
-    plan.actions = plan
-        .actions
-        .into_iter()
-        .map(|action| normalize_action_track(action, track_idx, &available_tracks))
-        .collect();
-
-    // ========== AI ENGINE: PROFESSIONAL OPTIMIZATIONS ==========
-    println!(
-        "[AI ENGINE] Processing {} total actions...",
-        plan.actions.len()
-    );
-
-    // Separate SetParam actions for optimization, keep others as-is
-    let mut set_param_actions: Vec<ai_engine::ActionPlan> = Vec::new();
-    let mut other_actions: Vec<PlannedAction> = Vec::new();
-
-    for action in plan.actions.iter() {
-        match action {
-            PlannedAction::SetParam {
-                track,
-                fx_index,
-                param_index,
-                value,
-                reason,
-            } => {
-                set_param_actions.push(ai_engine::ActionPlan {
-                    track: *track,
-                    fx_index: *fx_index,
-                    param_index: *param_index,
-                    value: *value,
-                    reason: reason.clone().unwrap_or_default(),
-                });
-            }
-            _ => {
-                // Keep ToggleFx, LoadPlugin, WebSearch, Noop as-is
-                other_actions.push(action.clone());
-            }
-        }
-    }
-
-    println!(
-        "[AI ENGINE] Split: {} SetParam actions, {} other actions",
-        set_param_actions.len(),
-        other_actions.len()
-    );
-
-    // 1. CONFLICT DETECTION (only for SetParam)
-    let conflicts = ai_engine::ActionOptimizer::detect_conflicts(&set_param_actions);
-    for conflict in &conflicts {
-        println!("[AI ENGINE] ⚠️  {}", conflict);
-    }
-    diagnostics.record_conflicts(conflicts);
-
-    // 2. ACTION DEDUPLICATION & OPTIMIZATION (only for SetParam)
-    let deduplicated = ai_engine::ActionOptimizer::deduplicate(set_param_actions);
-    if !deduplicated.is_empty() {
-        diagnostics.push_optimization(format!(
-            "SetParam actions optimized: {} → {} (deduplicated)",
-            plan.actions
-                .iter()
-                .filter(|a| matches!(a, PlannedAction::SetParam { .. }))
-                .count(),
-            deduplicated.len()
-        ));
-    }
-    println!(
-        "[AI ENGINE] Deduplicated SetParam: {} → {} actions",
-        plan.actions
-            .iter()
-            .filter(|a| matches!(a, PlannedAction::SetParam { .. }))
-            .count(),
-        deduplicated.len()
-    );
-
-    // 3. SAFETY VALIDATION (only for SetParam)
-    let mut safety_warnings = Vec::new();
-    for action in &deduplicated {
-        // Find parameter name from snapshot
-        if let Some(track_state) = find_track(&tracks_snapshot, action.track) {
-            if let Some(fx_state) = find_fx(track_state, action.fx_index) {
-                if let Some(param_state) = find_param(fx_state, action.param_index) {
-                    let (clamped_value, warning) =
-                        ai_engine::SafetyValidator::validate_value(&param_state.name, action.value);
-
-                    if let Some(warn) = warning {
-                        let formatted = format!(
-                            "{} :: {} -> {}: {}",
-                            fx_state.name, param_state.name, clamped_value, warn
-                        );
-                        diagnostics.push_safety_warning(formatted.clone());
-                        safety_warnings.push(formatted);
-                    }
-
-                    // 4. SEMANTIC ANALYSIS & RELATIONSHIP SUGGESTIONS
-                    let category = ai_engine::SemanticAnalyzer::categorize(&param_state.name);
-                    println!(
-                        "[AI ENGINE] Parameter '{}' categorized as {:?}",
-                        param_state.name, category
-                    );
-
-                    let suggestions = ai_engine::RelationshipEngine::suggest_compensations(
-                        &param_state.name,
-                        param_state.value,
-                        action.value,
-                    );
-
-                    for (param, delta, reason) in suggestions {
-                        let suggestion = format!("Adjust '{}' by {:.2} ({})", param, delta, reason);
-                        println!("[AI ENGINE] 💡 Suggestion: {}", suggestion);
-                        diagnostics.push_suggestion(suggestion);
-                    }
-                } else {
-                    diagnostics.push_safety_warning(format!(
-                        "Param {} not found on track {} fx {} — cannot validate value.",
-                        action.param_index, action.track, action.fx_index
-                    ));
-                }
-            } else {
-                diagnostics.push_safety_warning(format!(
-                    "FX {} not available on track {} — skipping parameter edits.",
-                    action.fx_index, action.track
-                ));
-            }
-        } else {
-            diagnostics.push_safety_warning(format!(
-                "Track {} missing for planned action (fx {}, param {}).",
-                action.track, action.fx_index, action.param_index
-            ));
-        }
-    }
-
-    for warning in &safety_warnings {
-        println!("[AI ENGINE] 🛡️  Safety: {}", warning);
-    }
-
-    // Track explicit enable intents to avoid double toggles
-    let planned_enables: HashSet<(i32, i32)> = other_actions
-        .iter()
-        .filter_map(|action| match action {
-            PlannedAction::ToggleFx {
-                track,
-                fx_index,
-                enabled: true,
-                ..
-            } => Some((*track, *fx_index)),
-            _ => None,
-        })
-        .collect();
-
-    // 5. PREFLIGHT: auto-enable FX that will be tweaked but are currently bypassed
-    let mut auto_enable_actions = Vec::new();
-    let mut auto_enabled_fx: HashSet<(i32, i32)> = HashSet::new();
-    for action in &deduplicated {
-        if planned_enables.contains(&(action.track, action.fx_index)) {
-            continue;
-        }
-
-        if let Some(track_state) = find_track(&tracks_snapshot, action.track) {
-            if let Some(fx_state) = find_fx(track_state, action.fx_index) {
-                if !fx_state.enabled && auto_enabled_fx.insert((action.track, action.fx_index)) {
-                    auto_enable_actions.push(PlannedAction::ToggleFx {
-                        track: action.track,
-                        fx_index: action.fx_index,
-                        enabled: true,
-                        reason: Some(format!("Enable '{}' before parameter edits", fx_state.name)),
-                    });
-
-                    diagnostics.push_preflight(format!(
-                        "Auto-enabling '{}' on track {} before parameter edits.",
-                        fx_state.name, action.track
-                    ));
-                }
-            }
-        }
-    }
-
-    // 6. ACTION FOCUS SUMMARY
-    let mut category_counts: HashMap<&str, usize> = HashMap::new();
-    for action in &deduplicated {
-        if let Some(track_state) = find_track(&tracks_snapshot, action.track) {
-            if let Some(fx_state) = find_fx(track_state, action.fx_index) {
-                if let Some(param_state) = find_param(fx_state, action.param_index) {
-                    let label =
-                        category_label(ai_engine::SemanticAnalyzer::categorize(&param_state.name));
-                    *category_counts.entry(label).or_default() += 1;
-                }
-            }
-        }
-    }
-
-    if !category_counts.is_empty() {
-        let mut focus_lines: Vec<String> = category_counts
-            .into_iter()
-            .map(|(label, count)| format!("{} x{}", label, count))
-            .collect();
-        focus_lines.sort();
-        diagnostics.push_focus(format!("SetParam coverage: {}", focus_lines.join(", ")));
-    }
-
-    // Rebuild full action list: auto-enables → other_actions → optimized SetParam with enriched reasons
-    plan.actions = auto_enable_actions;
-    plan.actions.extend(other_actions);
-    plan.actions.extend(
-        deduplicated
-            .into_iter()
-            .map(|action| PlannedAction::SetParam {
-                track: action.track,
-                fx_index: action.fx_index,
-                param_index: action.param_index,
-                value: action.value,
-                reason: Some(if action.reason.trim().is_empty() {
-                    build_action_reason(&action, &tracks_snapshot)
-                } else {
-                    action.reason
-                }),
-            }),
-    );
-
-    println!(
-        "[AI ENGINE] Final action count: {} (ready for execution)",
-        plan.actions.len()
-    );
-
-    let engine_report = diagnostics.to_report();
-    if let Some(report) = engine_report.as_ref() {
-        plan.summary = format!("{}\n\n[AI Engine Report]\n{}", plan.summary, report);
-    }
-
-    let self_critique = SelfCritique::evaluate(&plan, &diagnostics);
-
-    // ========== UNDO SYSTEM: Begin recording changes ==========
-    {
-        let mut undo_manager = lock_or_recover(&state.undo_manager);
-        undo_manager.begin_action(&format!(
-            "AI: {}",
-            message.chars().take(50).collect::<String>()
-        ));
-    }
-
-    // Record changes for undo before applying
-    for action in &plan.actions {
-        match action {
-            PlannedAction::SetParam {
-                track,
-                fx_index,
-                param_index,
-                value,
-                ..
-            } => {
-                if let Some(track_state) = find_track(&tracks_snapshot, *track) {
-                    if let Some(fx_state) = find_fx(track_state, *fx_index) {
-                        if let Some(param_state) = find_param(fx_state, *param_index) {
-                            let mut undo_manager = lock_or_recover(&state.undo_manager);
-                            undo_manager.record_param_change(
-                                *track,
-                                *fx_index,
-                                *param_index,
-                                &param_state.name,
-                                param_state.value,
-                                *value,
-                            );
-                        }
-                    }
-                }
-            }
-            PlannedAction::ToggleFx {
-                track,
-                fx_index,
-                enabled,
-                ..
-            } => {
-                if let Some(track_state) = find_track(&tracks_snapshot, *track) {
-                    if let Some(fx_state) = find_fx(track_state, *fx_index) {
-                        let mut undo_manager = lock_or_recover(&state.undo_manager);
-                        undo_manager.record_fx_toggle(
-                            *track,
-                            *fx_index,
-                            &fx_state.name,
-                            fx_state.enabled,
-                        );
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    let http_client = &state.http_client; // Clone is cheap for reqwest::Client
-    let action_logs = apply_actions(&reaper, http_client, &tracks_snapshot, &plan.actions).await?;
-    for log in &action_logs {
-        println!("[AI ACTION] {}", log);
-    }
-
-    let mut enriched_action_logs = action_logs.clone();
-    if let Some(critique) = self_critique {
-        enriched_action_logs.push(format!("Self-critique:\n{}", critique.summarize()));
-    }
-
-    // ========== UNDO SYSTEM: Commit the action ==========
-    {
-        let mut undo_manager = lock_or_recover(&state.undo_manager);
-        if let Some(action_id) = undo_manager.commit_action() {
-            println!("[UNDO] Recorded action: {}", action_id);
-        }
-    }
-
-    // ========== RECENT TONES: Add to history ==========
-    add_recent_tone(
-        &state,
-        &message,
-        &plan.summary,
-        track_idx,
-        plan.changes_table.len(),
-    );
-
-    {
-        let mut learning = lock_or_recover(&state.learning_system);
-        learning
-            .feedback_log
-            .push(format!("Executed plan with {} actions", plan.actions.len()));
-        if learning.feedback_log.len() > 10 {
-            learning.feedback_log.remove(0);
-        }
-    }
-
-    {
-        let mut history = lock_or_recover(&state.chat_history);
-        push_history(
-            &mut history,
-            ChatMessage {
-                role: "assistant".into(),
-                content: plan.summary.clone(),
-                timestamp: current_timestamp(),
-            },
-        );
-    }
-
-    let response = ChatResponse {
-        summary: plan.summary,
-        changes_table: plan.changes_table,
-        engine_report,
-        action_log: enriched_action_logs,
-    };
-
-    serde_json::to_string(&response).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn get_track_overview(state: State<'_, AppState>) -> Result<String, String> {
-    let reaper = { lock_or_recover(&state.reaper).clone() };
-    let tracks = reaper.get_tracks().await.map_err(|e| e.to_string())?;
-    serde_json::to_string(&tracks).map_err(|e| e.to_string())
-}
-
-async fn capture_preset_with_params(
-    name: &str,
-    reaper: &ReaperClient,
-) -> Result<PresetFile, String> {
-    let tracks = reaper
-        .get_tracks()
-        .await
-        .map_err(|e| format!("Failed to get tracks for preset: {e}"))?;
-
-    let mut preset_tracks = Vec::new();
-    for track in tracks.tracks {
-        let mut fx_states = Vec::new();
-        for fx in track.fx_list {
-            let snapshot = reaper
-                .get_fx_params(track.index, fx.index)
-                .await
-                .map_err(|e| {
-                    format!(
-                        "Failed to get params for track {} fx {}: {e}",
-                        track.index, fx.index
-                    )
-                })?;
-
-            let params = snapshot
-                .params
-                .into_iter()
-                .map(|p| PresetParamState {
-                    index: p.index,
-                    name: p.name,
-                    value: p.value,
-                })
-                .collect();
-
-            fx_states.push(PresetFxState {
-                index: fx.index,
-                name: fx.name,
-                params,
-            });
-        }
-
-        preset_tracks.push(PresetTrackState {
-            index: track.index,
-            name: track.name,
-            fx: fx_states,
-        });
-    }
-
-    Ok(PresetFile {
-        name: name.to_string(),
-        created_at: current_timestamp(),
-        project_path: None,
-        tracks: preset_tracks,
-    })
-}
-
-fn persist_preset_to_disk(preset: &PresetFile) -> Result<String, String> {
-    let mut preset_dir = PathBuf::from("presets");
-    fs::create_dir_all(&preset_dir)
-        .map_err(|e| format!("Failed to create preset directory: {e}"))?;
-
-    preset_dir.push(format!("{}.json", preset.name));
-    let serialized = serde_json::to_string_pretty(preset)
-        .map_err(|e| format!("Failed to serialize preset: {e}"))?;
-    fs::write(&preset_dir, serialized).map_err(|e| format!("Failed to write preset file: {e}"))?;
-
-    Ok(preset_dir.to_string_lossy().to_string())
-}
-
-async fn apply_preset_to_reaper(preset: &PresetFile, reaper: &ReaperClient) -> Result<(), String> {
-    for track in &preset.tracks {
-        for fx in &track.fx {
-            for param in &fx.params {
-                if let Err(err) = reaper
-                    .set_param(track.index, fx.index, &param.name, param.value)
-                    .await
-                {
-                    eprintln!(
-                        "[PRESET] Failed to set param {} on track {} fx {}: {}",
-                        param.name, track.index, fx.index, err
-                    );
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
-#[tauri::command]
-async fn set_fx_enabled(
-    track: i32,
-    fx: i32,
-    enabled: bool,
-    state: State<'_, AppState>,
-) -> Result<bool, String> {
-    let reaper = { lock_or_recover(&state.reaper).clone() };
-    reaper
-        .set_fx_enabled(track, fx, enabled)
-        .await
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn save_preset(name: String, state: State<'_, AppState>) -> Result<String, String> {
-    let reaper = { lock_or_recover(&state.reaper).clone() };
-    let project_path = reaper
-        .save_project(&name)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    let mut preset = capture_preset_with_params(&name, &reaper).await?;
-    preset.project_path = Some(project_path.clone());
-    let path = persist_preset_to_disk(&preset)?;
-
-    println!(
-        "[PRESET] Saved '{}' with {} tracks and {} FX to {} (project at {})",
-        name,
-        preset.tracks.len(),
-        preset.tracks.iter().map(|t| t.fx.len()).sum::<usize>(),
-        path,
-        project_path
-    );
-
-    Ok(path)
-}
-
-#[tauri::command]
-async fn load_preset(path: String, state: State<'_, AppState>) -> Result<String, String> {
-    let reaper = { lock_or_recover(&state.reaper).clone() };
-    let preset_contents = fs::read_to_string(&path).map_err(|e| e.to_string());
-
-    if let Ok(contents) = preset_contents {
-        if let Ok(preset) = serde_json::from_str::<PresetFile>(&contents) {
-            if let Some(project_path) = &preset.project_path {
-                reaper
-                    .load_project(project_path)
-                    .await
-                    .map_err(|e| format!("Failed to load project for preset: {e}"))?;
-            }
-
-            apply_preset_to_reaper(&preset, &reaper).await?;
-            return Ok(format!(
-                "Preset '{}' applied with {} tracks",
-                preset.name,
-                preset.tracks.len()
-            ));
-        }
-    }
-
-    reaper
-        .load_project(&path)
-        .await
-        .map_err(|e| e.to_string())?;
-    Ok(format!("Preset loaded from {}", path))
-}
-
-// ==================== UNDO/REDO COMMANDS ====================
-
-#[tauri::command]
-fn get_undo_state(state: State<'_, AppState>) -> Result<String, String> {
-    let manager = lock_or_recover(&state.undo_manager);
-    let undo_state = UndoState::from(&*manager);
-    serde_json::to_string(&undo_state).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn perform_undo(state: State<'_, AppState>) -> Result<String, String> {
-    let action = {
-        let mut manager = lock_or_recover(&state.undo_manager);
-        manager.pop_undo()
-    };
-
-    let Some(action) = action else {
-        return Err("Nothing to undo".to_string());
-    };
-
-    let reaper = { lock_or_recover(&state.reaper).clone() };
-
-    // Apply inverse of each change
-    for change in &action.parameter_changes {
-        if let Err(e) = reaper
-            .set_param(
-                change.track,
-                change.fx_index,
-                &change.param_name,
-                change.old_value,
-            )
-            .await
-        {
-            eprintln!("[UNDO] Failed to revert param: {}", e);
-        }
-    }
-
-    for toggle in &action.fx_toggles {
-        if let Err(e) = reaper
-            .set_fx_enabled(toggle.track, toggle.fx_index, toggle.was_enabled)
-            .await
-        {
-            eprintln!("[UNDO] Failed to revert toggle: {}", e);
-        }
-    }
-
-    // For plugin changes, we'd need to add/remove plugins
-    // This is more complex and may require REAPER extension support
-
-    // Move action to redo stack
-    {
-        let mut manager = lock_or_recover(&state.undo_manager);
-        manager.push_redo(action.clone());
-    }
-
-    Ok(format!("Undone: {}", action.description))
-}
-
-#[tauri::command]
-async fn perform_redo(state: State<'_, AppState>) -> Result<String, String> {
-    let action = {
-        let mut manager = lock_or_recover(&state.undo_manager);
-        manager.pop_redo()
-    };
-
-    let Some(action) = action else {
-        return Err("Nothing to redo".to_string());
-    };
-
-    let reaper = { lock_or_recover(&state.reaper).clone() };
-
-    // Re-apply each change
-    for change in &action.parameter_changes {
-        if let Err(e) = reaper
-            .set_param(
-                change.track,
-                change.fx_index,
-                &change.param_name,
-                change.new_value,
-            )
-            .await
-        {
-            eprintln!("[REDO] Failed to reapply param: {}", e);
-        }
-    }
-
-    for toggle in &action.fx_toggles {
-        if let Err(e) = reaper
-            .set_fx_enabled(toggle.track, toggle.fx_index, !toggle.was_enabled)
-            .await
-        {
-            eprintln!("[REDO] Failed to reapply toggle: {}", e);
-        }
-    }
-
-    // Move action back to undo stack
-    {
-        let mut manager = lock_or_recover(&state.undo_manager);
-        manager.push_undo(action.clone());
-    }
-
-    Ok(format!("Redone: {}", action.description))
-}
-
-#[tauri::command]
-fn get_undo_history(state: State<'_, AppState>, limit: Option<usize>) -> Result<String, String> {
-    let manager = lock_or_recover(&state.undo_manager);
-    let history = manager.get_undo_history(limit.unwrap_or(10));
-    serde_json::to_string(&history).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn clear_undo_history(state: State<'_, AppState>) -> Result<(), String> {
-    let mut manager = lock_or_recover(&state.undo_manager);
-    manager.clear();
-    Ok(())
-}
-
-// ==================== RECENT TONES COMMANDS ====================
-
-#[tauri::command]
-fn get_recent_tones(state: State<'_, AppState>) -> Result<String, String> {
-    let recent = lock_or_recover(&state.recent_tones);
-    serde_json::to_string(&*recent).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-fn clear_recent_tones(state: State<'_, AppState>) -> Result<(), String> {
-    let mut recent = lock_or_recover(&state.recent_tones);
-    recent.clear();
-    Ok(())
-}
-
-fn add_recent_tone(state: &AppState, query: &str, summary: &str, track: i32, changes_count: usize) {
-    let mut recent = lock_or_recover(&state.recent_tones);
-
-    let tone = RecentTone {
-        id: uuid::Uuid::new_v4().to_string(),
-        query: query.to_string(),
-        summary: summary.to_string(),
-        timestamp: current_timestamp(),
-        track,
-        changes_count,
-    };
-
-    // Add to front
-    recent.insert(0, tone);
-
-    // Keep only MAX_RECENT_TONES
-    recent.truncate(MAX_RECENT_TONES);
-}
-
-// ==================== EXPORT COMMANDS ====================
-
-#[tauri::command]
-fn export_tone_as_text(changes: Vec<ChangeEntry>, summary: String) -> Result<String, String> {
-    let mut output = String::new();
-
-    output.push_str("═══════════════════════════════════════\n");
-    output.push_str("        TONEFORGE - TONE EXPORT\n");
-    output.push_str("═══════════════════════════════════════\n\n");
-
-    output.push_str(&format!("Summary: {}\n\n", summary));
-
-    output.push_str("Changes Applied:\n");
-    output.push_str("───────────────────────────────────────\n");
-
-    for (i, change) in changes.iter().enumerate() {
-        output.push_str(&format!(
-            "{}. {} - {}\n   {} → {}\n   Reason: {}\n\n",
-            i + 1,
-            change.plugin,
-            change.parameter,
-            change.old_value,
-            change.new_value,
-            change.reason
-        ));
-    }
-
-    output.push_str("───────────────────────────────────────\n");
-    output.push_str(&format!("Total Changes: {}\n", changes.len()));
-    output.push_str(&format!("Exported: {}\n", chrono_lite_now()));
-    output.push_str("Generated by ToneForge\n");
-
-    Ok(output)
-}
-
-fn chrono_lite_now() -> String {
-    let secs = current_timestamp();
-    // Simple timestamp formatting without chrono dependency
-    format!("Unix timestamp: {}", secs)
-}
-
-// ==================== SECURE STORAGE COMMANDS ====================
+// ==================== SECURE STORAGE ====================
 
 #[tauri::command]
 fn save_api_config(
@@ -2108,56 +577,53 @@ fn has_saved_api_config() -> bool {
     secure_storage::config_exists()
 }
 
-#[tauri::command]
-fn mask_api_key(key: String) -> String {
-    secure_storage::mask_api_key(&key)
-}
+// ==================== MAIN APP ====================
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Try to load encyclopedia on startup
+    let encyclopedia = ToneEncyclopedia::load_from_file(ENCYCLOPEDIA_PATH)
+        .unwrap_or_else(|e| {
+            println!("[STARTUP] Failed to load encyclopedia: {}", e);
+            println!("[STARTUP] Using empty encyclopedia");
+            ToneEncyclopedia::new()
+        });
+
+    println!("[STARTUP] Encyclopedia loaded: {} tones", encyclopedia.count());
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState {
             reaper: Mutex::new(ReaperClient::new()),
             ai_provider: Mutex::new(None),
-            chat_history: Mutex::new(Vec::new()),
-            http_client: reqwest::Client::new(), // Shared HTTP client
-            tone_researcher: ToneResearcher::new(), // First AI layer for tone research
-            undo_manager: Mutex::new(UndoManager::new()), // Undo/Redo system
-            recent_tones: Mutex::new(Vec::new()), // Recent tones history
-            learning_system: Mutex::new(LearningSystem::default()),
+            tone_encyclopedia: Mutex::new(encyclopedia),
+            undo_manager: Mutex::new(UndoManager::new()),
         })
         .invoke_handler(tauri::generate_handler![
+            // Connection
             check_reaper_connection,
+            // AI Configuration
             configure_ai_provider,
-            get_chat_history,
-            process_chat_message,
-            get_track_overview,
-            set_fx_enabled,
-            save_preset,
-            load_preset,
-            load_reference_audio,
-            load_input_audio,
-            calculate_eq_match,
-            export_eq_settings,
-            // Undo/Redo commands
+            // Tone Processing (Main Feature)
+            process_tone_request,
+            // Encyclopedia Management
+            load_encyclopedia,
+            get_encyclopedia_stats,
+            search_encyclopedia,
+            // Undo/Redo
             get_undo_state,
             perform_undo,
             perform_redo,
-            get_undo_history,
-            clear_undo_history,
-            // Recent tones commands
-            get_recent_tones,
-            clear_recent_tones,
-            // Export commands
-            export_tone_as_text,
-            // Secure storage commands
+            // Audio Analysis
+            load_reference_audio,
+            load_input_audio,
+            calculate_eq_match,
+            // Secure Storage
             save_api_config,
             load_api_config,
             delete_api_config,
             has_saved_api_config,
-            mask_api_key,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
