@@ -20,39 +20,39 @@ const PHASE_CONFIG: Record<
 > = {
   detecting: {
     icon: "🔍",
-    label: "Detecting Tone Request",
+    label: "Starting",
     color: "#3b82f6",
-    description: "Analyzing your message...",
+    description: "Preparing the pipeline...",
   },
   researching: {
-    icon: "🌐",
-    label: "Layer 1: Researching Tone",
+    icon: "📚",
+    label: "Layer 1: Tone AI",
     color: "#8b5cf6",
-    description: "Searching internet for tone details...",
+    description: "Searching the encyclopedia / generating parameters...",
   },
   implementing: {
     icon: "🎛️",
-    label: "Layer 2: Implementing Tone",
+    label: "Layer 2: Mapping",
     color: "#f59e0b",
-    description: "Matching plugins to research...",
+    description: "Sanitizing and mapping parameters to your chain...",
   },
   optimizing: {
     icon: "⚡",
-    label: "Optimizing Parameters",
+    label: "Validating",
     color: "#10b981",
-    description: "AI Engine optimizations...",
+    description: "Validating and preparing actions...",
   },
   applying: {
     icon: "🎸",
-    label: "Applying Changes",
+    label: "Applying + Verify",
     color: "#ff6b35",
-    description: "Setting parameters in REAPER...",
+    description: "Applying actions to REAPER and verifying...",
   },
   done: {
     icon: "✅",
     label: "Done",
     color: "#22c55e",
-    description: "Tone created successfully!",
+    description: "Completed successfully.",
   },
 };
 

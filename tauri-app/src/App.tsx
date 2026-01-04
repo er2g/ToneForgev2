@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { EqMatchView } from "./eq-match/EqMatchView";
 import { ChangesTable } from "./components/ChangesTable";
 import { AILayerStatus, AILayerPhase } from "./components/AILayerStatus";
@@ -11,6 +12,7 @@ import { ThemeToggle, useTheme } from "./components/ThemeToggle";
 import { FxSearch } from "./components/FxSearch";
 import { Tooltip } from "./components/Tooltip";
 import { SkeletonChannels, SkeletonFxList } from "./components/Skeleton";
+import { LiveRunMonitor, UiLogEvent } from "./components/LiveRunMonitor";
 import { useNotificationSound } from "./hooks/useNotificationSound";
 import { ChatResponse, ChangeEntry, SecureConfig } from "./types";
 import "./App.css";
@@ -60,6 +62,7 @@ interface TrackResponse {
 }
 
 const HISTORY_STORAGE_KEY = "toneforge_history";
+const RUN_LOGS_STORAGE_KEY = "toneforge_last_run_logs_v1";
 
 function App() {
   const [messages, setMessages] = useState<Message[]>([]);
@@ -72,6 +75,16 @@ function App() {
   const [tracksLoading, setTracksLoading] = useState(true);
   const [aiPhase, setAiPhase] = useState<AILayerPhase | null>(null);
   const [aiMessage, setAiMessage] = useState<string>("");
+  const [liveLogs, setLiveLogs] = useState<UiLogEvent[]>(() => {
+    const cached = localStorage.getItem(RUN_LOGS_STORAGE_KEY);
+    if (!cached) return [];
+    try {
+      const parsed = JSON.parse(cached) as { logs?: UiLogEvent[] };
+      return Array.isArray(parsed.logs) ? parsed.logs : [];
+    } catch {
+      return [];
+    }
+  });
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
   const [tracks, setTracks] = useState<TrackInfo[]>([]);
   const [selectedTrack, setSelectedTrack] = useState(0);
@@ -82,6 +95,7 @@ function App() {
   const [fxSearchQuery, setFxSearchQuery] = useState("");
 
   const inputRef = useRef<HTMLInputElement>(null);
+  const activeRunIdRef = useRef<string | null>(null);
   const { theme, toggleTheme } = useTheme();
   const { playSuccess, playError, playNotification } = useNotificationSound();
 
@@ -146,6 +160,50 @@ function App() {
         // ignore parse error
       }
     }
+  }, []);
+
+  // Live backend log stream
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    listen<UiLogEvent>("toneforge:log", (event) => {
+      const payload = event.payload;
+      const currentRun = activeRunIdRef.current;
+      if (!currentRun || payload.request_id !== currentRun) return;
+
+      // Map real stages to UI phases
+      const stage = (payload.stage || "").toLowerCase();
+      setLiveLogs((prev) => {
+        const next = [...prev, payload];
+        if (stage === "done") {
+          try {
+            localStorage.setItem(
+              RUN_LOGS_STORAGE_KEY,
+              JSON.stringify({ request_id: payload.request_id, saved_at_ms: Date.now(), logs: next })
+            );
+          } catch {
+            // ignore storage errors
+          }
+        }
+        return next;
+      });
+      if (stage === "start") setAiPhase("detecting");
+      else if (stage === "tone_ai") setAiPhase("researching");
+      else if (stage === "sanitize" || stage === "snapshot" || stage === "map") setAiPhase("implementing");
+      else if (stage === "apply" || stage === "verify") setAiPhase("applying");
+      else if (stage === "done") setAiPhase("done");
+
+      if (payload.message) setAiMessage(payload.message);
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((e) => {
+        console.error("Failed to listen for toneforge logs:", e);
+      });
+
+    return () => {
+      unlisten?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -270,7 +328,7 @@ function App() {
 
     try {
       await invoke<string>("configure_ai_provider", {
-        provider,
+        providerName: provider,
         model,
         apiKey,
       });
@@ -320,53 +378,31 @@ function App() {
     };
     setMessages((prev) => [...prev, userMessage]);
     const payload = input;
-    const userInput = input;
     setInput("");
     setLoading(true);
 
-    // AI Phase simulation
-    const simulatePhases = async () => {
-      const toneKeywords = ["tone", "sound", "tonu", "ses"];
-      const hasToneRequest = toneKeywords.some(keyword =>
-        userInput.toLowerCase().includes(keyword)
-      );
-
-      if (hasToneRequest) {
-        setAiPhase("detecting");
-        setAiMessage("Analyzing your tone request...");
-        await new Promise(resolve => setTimeout(resolve, 800));
-
-        setAiPhase("researching");
-        setAiMessage("Searching internet for tone details...");
-        await new Promise(resolve => setTimeout(resolve, 2000));
-
-        setAiPhase("implementing");
-        setAiMessage("Matching plugins to research results...");
-        await new Promise(resolve => setTimeout(resolve, 1500));
-      } else {
-        setAiPhase("implementing");
-        setAiMessage("Processing your request...");
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
-
-      setAiPhase("optimizing");
-      setAiMessage("AI Engine optimizations...");
-      await new Promise(resolve => setTimeout(resolve, 1000));
-
-      setAiPhase("applying");
-      setAiMessage("Setting parameters in REAPER...");
-    };
-
     try {
-      const phasePromise = simulatePhases();
+      const runId =
+        globalThis.crypto && "randomUUID" in globalThis.crypto
+          ? globalThis.crypto.randomUUID()
+          : `run-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+
+      activeRunIdRef.current = runId;
+      try {
+        localStorage.removeItem(RUN_LOGS_STORAGE_KEY);
+      } catch {
+        // ignore storage errors
+      }
+      setLiveLogs([]);
+      setAiPhase("detecting");
+      setAiMessage("Starting tone pipeline...");
 
       const responseString = await invoke<string>("process_chat_message", {
+        requestId: runId,
         message: payload,
         track: selectedTrack,
         customInstructions,
       });
-
-      await phasePromise;
 
       const response: ChatResponse = JSON.parse(responseString);
 
@@ -755,6 +791,21 @@ function App() {
             </aside>
 
             <div className="chat-panel">
+              {apiKeySet && (
+                <LiveRunMonitor
+                  title="Live Pipeline"
+                  logs={liveLogs}
+                  isRunning={loading}
+                  onClear={() => {
+                    setLiveLogs([]);
+                    try {
+                      localStorage.removeItem(RUN_LOGS_STORAGE_KEY);
+                    } catch {
+                      // ignore storage errors
+                    }
+                  }}
+                />
+              )}
               <div className="chat-messages">
                 {apiKeySet ? (
                   <>

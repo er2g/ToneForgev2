@@ -394,6 +394,68 @@ curl -X POST http://127.0.0.1:8888/fx/param \
 
 ---
 
+#### `GET /fx/param_index`
+
+Get a single FX parameter value by index (**no fuzzy matching**).
+
+**Query Parameters:**
+- `track`: Track index
+- `fx`: FX index
+- `param_index`: Parameter index (0-based)
+
+**Response:**
+```json
+{
+  "track": 0,
+  "fx": 0,
+  "param_index": 5,
+  "param_name": "Gain",
+  "value": 0.75
+}
+```
+
+**Example:**
+```bash
+curl "http://127.0.0.1:8888/fx/param_index?track=0&fx=0&param_index=5"
+```
+
+---
+
+#### `POST /fx/param_index`
+
+Set an FX parameter value by index (**no fuzzy matching**).
+
+**Request Body:**
+```json
+{
+  "track": 0,
+  "fx": 0,
+  "param_index": 5,
+  "value": 0.75
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "track": 0,
+  "fx": 0,
+  "param_index": 5,
+  "param_name": "Gain",
+  "value": 0.75
+}
+```
+
+**Example:**
+```bash
+curl -X POST http://127.0.0.1:8888/fx/param_index \
+  -H "Content-Type: application/json" \
+  -d '{"track":0,"fx":0,"param_index":5,"value":0.75}'
+```
+
+---
+
 ### 5. Transport Control
 
 #### `GET /transport/bpm`

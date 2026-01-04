@@ -192,6 +192,22 @@ Response:
 }
 ```
 
+#### FX Parametresi (Index ile, fuzzy yok)
+```http
+POST /fx/param_index
+Content-Type: application/json
+
+{
+  "track": 0,
+  "fx": 0,
+  "param_index": 5,
+  "value": 0.8
+}
+
+GET /fx/param_index?track=0&fx=0&param_index=5
+```
+> Bu endpoint, parametre adında fuzzy arama yapmadan direkt index ile okur/yazar. Deterministic mapping için önerilir.
+
 #### Plugin Ekle
 ```http
 POST /fx/add
