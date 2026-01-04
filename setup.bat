@@ -54,10 +54,20 @@ echo.
 
 echo [3/5] Building REAPER Extension...
 cd reaper-extension
-mkdir build 2>nul
-cd build
+rem Use a local build dir (keeps repo-clean even if build artifacts are tracked)
+if exist build-local (
+    rem Avoid stale CMakeCache.txt from a different path/generator
+    rmdir /s /q build-local
+)
+mkdir build-local 2>nul
+cd build-local
 
-cmake .. -G "Visual Studio 16 2019" -A x64
+echo Configuring with CMake...
+cmake .. -G "Visual Studio 17 2022" -A x64
+if %errorlevel% neq 0 (
+    echo Visual Studio 2022 generator failed, trying Visual Studio 2019...
+    cmake .. -G "Visual Studio 16 2019" -A x64
+)
 if %errorlevel% neq 0 (
     echo ERROR: CMake configuration failed!
     echo Make sure you have Visual Studio 2019 or newer installed
@@ -80,10 +90,10 @@ echo [4/5] Installing REAPER Extension...
 set REAPER_PLUGINS=%APPDATA%\REAPER\UserPlugins
 if not exist "%REAPER_PLUGINS%" mkdir "%REAPER_PLUGINS%"
 
-copy reaper-extension\build\bin\Release\reaper_toneforge.dll "%REAPER_PLUGINS%\" >nul
+copy reaper-extension\build-local\bin\Release\reaper_toneforge.dll "%REAPER_PLUGINS%\" >nul
 if %errorlevel% neq 0 (
     echo WARNING: Could not copy to REAPER plugins folder
-    echo You may need to copy manually: reaper-extension\build\bin\Release\reaper_toneforge.dll
+    echo You may need to copy manually: reaper-extension\build-local\bin\Release\reaper_toneforge.dll
     echo To: %REAPER_PLUGINS%
 ) else (
     echo OK - Extension installed to REAPER

@@ -1,0 +1,14 @@
+# Dependencies
+external/
+
+# REAPER extension local builds
+reaper-extension/build-local/
+
+# Tauri frontend
+tauri-app/node_modules/
+tauri-app/dist/
+
+# Rust
+tauri-app/src-tauri/target/
+**/*.pdb
+

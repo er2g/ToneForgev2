@@ -18,16 +18,18 @@ import { ChatResponse, ChangeEntry, SecureConfig } from "./types";
 import "./App.css";
 
 const PROVIDERS = [
+  { key: "vertex", label: "Google Vertex (Gemini)" },
   { key: "xai", label: "xAI Grok" },
 ] as const;
 
 type ProviderKey = (typeof PROVIDERS)[number]["key"];
 
 const MODEL_PRESETS: Record<ProviderKey, string[]> = {
+  vertex: ["gemini-2.5-pro", "gemini-2.0-flash"],
   xai: ["grok-2-latest", "grok-2-vision", "grok-beta"],
 };
 
-const DEFAULT_PROVIDER: ProviderKey = "xai";
+const DEFAULT_PROVIDER: ProviderKey = "vertex";
 const DEFAULT_MODEL = MODEL_PRESETS[DEFAULT_PROVIDER][0];
 
 function isProviderKey(value: string): value is ProviderKey {

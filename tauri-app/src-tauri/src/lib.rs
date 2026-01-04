@@ -40,12 +40,34 @@ use std::collections::VecDeque;
 use std::fs;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::Manager;
+use tauri::Emitter;
+use tokio::sync::Mutex as AsyncMutex;
+use std::sync::Arc;
 use tauri::State;
 use tone_encyclopedia::ToneEncyclopedia;
 use undo_redo::{UndoManager, UndoState};
 
 const ENCYCLOPEDIA_PATH: &str = "tone_encyclopedia.json";
+
+fn resolve_encyclopedia_path() -> std::path::PathBuf {
+    let manifest_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let filename = std::path::PathBuf::from(ENCYCLOPEDIA_PATH);
+
+    let candidates = [
+        std::env::current_dir().ok().map(|d| d.join(&filename)),
+        Some(manifest_dir.join(&filename)),
+        Some(manifest_dir.join("..").join(&filename)),
+        Some(manifest_dir.join("..").join("..").join(&filename)),
+    ];
+
+    for candidate in candidates.into_iter().flatten() {
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+
+    manifest_dir.join("..").join("..").join(&filename)
+}
 
 // ==================== APP STATE ====================
 
@@ -63,7 +85,7 @@ struct AppState {
     reaper: Mutex<ReaperClient>,
     ai_provider: Mutex<Option<AIProvider>>,
     tone_encyclopedia: Mutex<ToneEncyclopedia>,
-    undo_manager: Mutex<UndoManager>,
+    undo_manager: Arc<AsyncMutex<UndoManager>>,
     conversation_manager: Mutex<ConversationManager>,
     recent_tones: Mutex<VecDeque<RecentTone>>,
 }
@@ -72,7 +94,7 @@ struct AppState {
 
 #[tauri::command]
 async fn check_reaper_connection(state: State<'_, AppState>) -> Result<bool, String> {
-    let reaper = state.reaper.lock().unwrap();
+    let reaper = state.reaper.lock().unwrap().clone();
     reaper.ping().await.map_err(|e| e.to_string())
 }
 
@@ -87,6 +109,7 @@ async fn configure_ai_provider(
         "openai" | "gpt" => AIProvider::openai(api_key, model.clone()),
         "claude" | "anthropic" => AIProvider::claude(api_key, model.clone()),
         "gemini" | "google" => AIProvider::gemini(api_key, model.clone()),
+        "vertex" | "vertex-gemini" | "vertexai" => AIProvider::vertex(api_key, model.clone()),
         "grok" | "xai" => AIProvider::grok(api_key, model.clone()),
         _ => return Err(format!("Unsupported provider: {}", provider_name)),
     };
@@ -228,7 +251,7 @@ async fn send_message(
             &conversation_id,
             MessageRole::Assistant,
             response_data.content.clone(),
-            response_data.metadata,
+            response_data.metadata.clone(),
         )?;
     }
 
@@ -310,8 +333,10 @@ async fn process_act_message(
 
     let act_mode = ActMode::new(encyclopedia, reaper, ai_provider);
 
-    let mut undo_manager = state.undo_manager.lock().unwrap();
-    let response = act_mode.process_message(message, track_index, &mut undo_manager).await?;
+    let mut undo_manager = state.undo_manager.clone().lock_owned().await;
+    let response = act_mode
+        .process_message(message, track_index, &mut *undo_manager)
+        .await?;
 
     let content = format!(
         "**{}**\n\n{}\n\n**Actions Applied**: {}\n\n**Details**:\n{}",
@@ -339,7 +364,7 @@ async fn process_act_message(
 
 // ==================== LEGACY UI WRAPPERS (src/App.tsx compatibility) ====================
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct LegacyChangeEntry {
     plugin: String,
     parameter: String,
@@ -391,7 +416,7 @@ impl ActProgressSink for TauriActProgress {
             details: event.details,
             step: event.step,
         };
-        let _ = self.app.emit_all("toneforge:log", payload);
+        let _ = self.app.emit("toneforge:log", payload);
     }
 }
 
@@ -491,9 +516,9 @@ async fn process_chat_message(
         request_id: request_id.clone(),
     };
 
-    let mut undo_manager = state.undo_manager.lock().unwrap();
+    let mut undo_manager = state.undo_manager.clone().lock_owned().await;
     let response = act_mode
-        .process_message_with_progress(&user_message, track, &mut undo_manager, Some(&sink))
+        .process_message_with_progress(&user_message, track, &mut *undo_manager, Some(&sink))
         .await?;
 
     let last_action = undo_manager.last_undo_action();
@@ -631,8 +656,8 @@ async fn search_encyclopedia(
 // ==================== UNDO/REDO ====================
 
 #[tauri::command]
-fn get_undo_state(state: State<'_, AppState>) -> Result<String, String> {
-    let manager = state.undo_manager.lock().unwrap();
+async fn get_undo_state(state: State<'_, AppState>) -> Result<String, String> {
+    let manager = state.undo_manager.lock().await;
     let undo_state = UndoState::from(&*manager);
     serde_json::to_string(&undo_state).map_err(|e| e.to_string())
 }
@@ -640,7 +665,7 @@ fn get_undo_state(state: State<'_, AppState>) -> Result<String, String> {
 #[tauri::command]
 async fn perform_undo(state: State<'_, AppState>) -> Result<String, String> {
     let action = {
-        let mut manager = state.undo_manager.lock().unwrap();
+        let mut manager = state.undo_manager.lock().await;
         manager.pop_undo()
     };
 
@@ -648,7 +673,7 @@ async fn perform_undo(state: State<'_, AppState>) -> Result<String, String> {
         return Err("Nothing to undo".to_string());
     };
 
-    let reaper = state.reaper.lock().unwrap();
+    let reaper = state.reaper.lock().unwrap().clone();
 
     for change in &action.parameter_changes {
         if let Err(e) = reaper
@@ -669,7 +694,7 @@ async fn perform_undo(state: State<'_, AppState>) -> Result<String, String> {
     }
 
     {
-        let mut manager = state.undo_manager.lock().unwrap();
+        let mut manager = state.undo_manager.lock().await;
         manager.push_redo(action.clone());
     }
 
@@ -679,7 +704,7 @@ async fn perform_undo(state: State<'_, AppState>) -> Result<String, String> {
 #[tauri::command]
 async fn perform_redo(state: State<'_, AppState>) -> Result<String, String> {
     let action = {
-        let mut manager = state.undo_manager.lock().unwrap();
+        let mut manager = state.undo_manager.lock().await;
         manager.pop_redo()
     };
 
@@ -687,7 +712,7 @@ async fn perform_redo(state: State<'_, AppState>) -> Result<String, String> {
         return Err("Nothing to redo".to_string());
     };
 
-    let reaper = state.reaper.lock().unwrap();
+    let reaper = state.reaper.lock().unwrap().clone();
 
     for change in &action.parameter_changes {
         if let Err(e) = reaper
@@ -708,7 +733,7 @@ async fn perform_redo(state: State<'_, AppState>) -> Result<String, String> {
     }
 
     {
-        let mut manager = state.undo_manager.lock().unwrap();
+        let mut manager = state.undo_manager.lock().await;
         manager.push_undo(action.clone());
     }
 
@@ -787,9 +812,11 @@ fn has_saved_api_config() -> bool {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Load encyclopedia on startup
-    let encyclopedia = ToneEncyclopedia::load_from_file(ENCYCLOPEDIA_PATH)
+    let encyclopedia_path = resolve_encyclopedia_path();
+    let encyclopedia = ToneEncyclopedia::load_from_file(&encyclopedia_path)
         .unwrap_or_else(|e| {
             println!("[STARTUP] Failed to load encyclopedia: {}", e);
+            println!("[STARTUP] Encyclopedia path attempted: {}", encyclopedia_path.display());
             println!("[STARTUP] Using empty encyclopedia");
             ToneEncyclopedia::new()
         });
@@ -805,7 +832,7 @@ pub fn run() {
             reaper: Mutex::new(ReaperClient::new()),
             ai_provider: Mutex::new(None),
             tone_encyclopedia: Mutex::new(encyclopedia),
-            undo_manager: Mutex::new(UndoManager::new()),
+            undo_manager: Arc::new(AsyncMutex::new(UndoManager::new())),
             conversation_manager: Mutex::new(ConversationManager::new()),
             recent_tones: Mutex::new(VecDeque::new()),
         })

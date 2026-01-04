@@ -149,7 +149,8 @@ impl From<ToneForgeError> for ErrorResponse {
 
 impl From<ToneForgeError> for String {
     fn from(err: ToneForgeError) -> Self {
-        serde_json::to_string(&ErrorResponse::from(err)).unwrap_or_else(|_| err.to_string())
+        let fallback = err.to_string();
+        serde_json::to_string(&ErrorResponse::from(err)).unwrap_or(fallback)
     }
 }
 

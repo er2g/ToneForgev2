@@ -15,6 +15,7 @@ pub enum AIProvider {
     OpenAI { api_key: String, model: String },
     Claude { api_key: String, model: String },
     Gemini { api_key: String, model: String },
+    Vertex { api_key: String, model: String },
     Grok { api_key: String, model: String },
 }
 
@@ -34,6 +35,11 @@ impl AIProvider {
         AIProvider::Gemini { api_key, model }
     }
 
+    /// Create Vertex AI (Gemini) provider
+    pub fn vertex(api_key: String, model: String) -> Self {
+        AIProvider::Vertex { api_key, model }
+    }
+
     /// Create Grok provider
     pub fn grok(api_key: String, model: String) -> Self {
         AIProvider::Grok { api_key, model }
@@ -45,6 +51,7 @@ impl AIProvider {
             AIProvider::OpenAI { .. } => "OpenAI",
             AIProvider::Claude { .. } => "Claude",
             AIProvider::Gemini { .. } => "Gemini",
+            AIProvider::Vertex { .. } => "Vertex AI",
             AIProvider::Grok { .. } => "Grok",
         }
     }
@@ -55,6 +62,7 @@ impl AIProvider {
             AIProvider::OpenAI { model, .. } => model,
             AIProvider::Claude { model, .. } => model,
             AIProvider::Gemini { model, .. } => model,
+            AIProvider::Vertex { model, .. } => model,
             AIProvider::Grok { model, .. } => model,
         }
     }
@@ -78,6 +86,10 @@ impl AIProvider {
                 self.generate_gemini(api_key, model, system_prompt, user_message)
                     .await
             }
+            AIProvider::Vertex { api_key, model } => {
+                self.generate_vertex(api_key, model, system_prompt, user_message)
+                    .await
+            }
             AIProvider::Grok { api_key, model } => {
                 self.generate_grok(api_key, model, system_prompt, user_message)
                     .await
@@ -97,12 +109,12 @@ impl AIProvider {
         #[derive(Serialize)]
         struct OpenAIRequest {
             model: String,
-            messages: Vec<OpenAIMessage>,
+            messages: Vec<OpenAIRequestMessage>,
             temperature: f32,
         }
 
         #[derive(Serialize)]
-        struct OpenAIMessage {
+        struct OpenAIRequestMessage {
             role: String,
             content: String,
         }
@@ -114,11 +126,11 @@ impl AIProvider {
 
         #[derive(Deserialize)]
         struct OpenAIChoice {
-            message: OpenAIMessage,
+            message: OpenAIResponseMessage,
         }
 
         #[derive(Deserialize)]
-        struct OpenAIMessage {
+        struct OpenAIResponseMessage {
             content: String,
         }
 
@@ -127,11 +139,11 @@ impl AIProvider {
         let request = OpenAIRequest {
             model: model.to_string(),
             messages: vec![
-                OpenAIMessage {
+                OpenAIRequestMessage {
                     role: "system".to_string(),
                     content: system_prompt.to_string(),
                 },
-                OpenAIMessage {
+                OpenAIRequestMessage {
                     role: "user".to_string(),
                     content: user_message.to_string(),
                 },
@@ -321,6 +333,103 @@ impl AIProvider {
             .and_then(|c| c.content.parts.get(0))
             .map(|p| p.text.clone())
             .ok_or("No response from Gemini")?;
+
+        Ok(content.trim().to_string())
+    }
+
+    // ==================== VERTEX AI (Gemini via aiplatform.googleapis.com) ====================
+
+    async fn generate_vertex(
+        &self,
+        api_key: &str,
+        model: &str,
+        system_prompt: &str,
+        user_message: &str,
+    ) -> Result<String, Box<dyn Error>> {
+        #[derive(Serialize)]
+        struct VertexRequest {
+            #[serde(rename = "systemInstruction")]
+            system_instruction: VertexSystemInstruction,
+            contents: Vec<VertexContent>,
+        }
+
+        #[derive(Serialize)]
+        struct VertexSystemInstruction {
+            parts: Vec<VertexPart>,
+        }
+
+        #[derive(Serialize)]
+        struct VertexContent {
+            role: String,
+            parts: Vec<VertexPart>,
+        }
+
+        #[derive(Serialize)]
+        struct VertexPart {
+            text: String,
+        }
+
+        #[derive(Deserialize)]
+        struct VertexResponse {
+            candidates: Vec<VertexCandidate>,
+        }
+
+        #[derive(Deserialize)]
+        struct VertexCandidate {
+            content: VertexResponseContent,
+        }
+
+        #[derive(Deserialize)]
+        struct VertexResponseContent {
+            parts: Vec<VertexResponsePart>,
+        }
+
+        #[derive(Deserialize)]
+        struct VertexResponsePart {
+            text: String,
+        }
+
+        let client = reqwest::Client::new();
+
+        let request = VertexRequest {
+            system_instruction: VertexSystemInstruction {
+                parts: vec![VertexPart {
+                    text: system_prompt.to_string(),
+                }],
+            },
+            contents: vec![VertexContent {
+                role: "user".to_string(),
+                parts: vec![VertexPart {
+                    text: user_message.to_string(),
+                }],
+            }],
+        };
+
+        let url = format!(
+            "https://aiplatform.googleapis.com/v1/publishers/google/models/{}:generateContent",
+            model
+        );
+
+        let response = client
+            .post(&url)
+            .query(&[("key", api_key)])
+            .header("Content-Type", "application/json")
+            .json(&request)
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(format!("Vertex API error: {}", error_text).into());
+        }
+
+        let parsed: VertexResponse = response.json().await?;
+        let content = parsed
+            .candidates
+            .get(0)
+            .and_then(|c| c.content.parts.get(0))
+            .map(|p| p.text.clone())
+            .ok_or("No response from Vertex")?;
 
         Ok(content.trim().to_string())
     }
