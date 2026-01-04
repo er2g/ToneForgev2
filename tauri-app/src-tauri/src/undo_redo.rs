@@ -13,6 +13,8 @@ const MAX_UNDO_HISTORY: usize = 50;
 pub struct ParameterChange {
     pub track: i32,
     pub fx_index: i32,
+    #[serde(default)]
+    pub fx_name: String,
     pub param_index: i32,
     pub param_name: String,
     pub old_value: f64,
@@ -114,6 +116,7 @@ impl UndoManager {
         &mut self,
         track: i32,
         fx_index: i32,
+        fx_name: &str,
         param_index: i32,
         param_name: &str,
         old_value: f64,
@@ -123,6 +126,7 @@ impl UndoManager {
             action.add_param_change(ParameterChange {
                 track,
                 fx_index,
+                fx_name: fx_name.to_string(),
                 param_index,
                 param_name: param_name.to_string(),
                 old_value,
@@ -241,6 +245,10 @@ impl UndoManager {
         self.redo_stack.back().map(|a| a.description.as_str())
     }
 
+    pub fn last_undo_action(&self) -> Option<UndoAction> {
+        self.undo_stack.back().cloned()
+    }
+
     /// Get undo stack size
     pub fn undo_count(&self) -> usize {
         self.undo_stack.len()
@@ -321,7 +329,7 @@ mod tests {
 
         // Begin and commit an action
         manager.begin_action("Test action");
-        manager.record_param_change(0, 0, 1, "Gain", 0.5, 0.8);
+        manager.record_param_change(0, 0, "Amp", 1, "Gain", 0.5, 0.8);
         manager.commit_action();
 
         // Should now have undo available
@@ -336,7 +344,7 @@ mod tests {
 
         // Create action
         manager.begin_action("Change gain");
-        manager.record_param_change(0, 0, 1, "Gain", 0.5, 0.8);
+        manager.record_param_change(0, 0, "Amp", 1, "Gain", 0.5, 0.8);
         manager.commit_action();
 
         // Undo
@@ -374,7 +382,7 @@ mod tests {
 
         // Create and undo an action
         manager.begin_action("Action 1");
-        manager.record_param_change(0, 0, 1, "Gain", 0.5, 0.8);
+        manager.record_param_change(0, 0, "Amp", 1, "Gain", 0.5, 0.8);
         manager.commit_action();
 
         let action = manager.pop_undo().unwrap();
@@ -383,7 +391,7 @@ mod tests {
 
         // New action should clear redo
         manager.begin_action("Action 2");
-        manager.record_param_change(0, 0, 2, "Bass", 0.3, 0.6);
+        manager.record_param_change(0, 0, "Amp", 2, "Bass", 0.3, 0.6);
         manager.commit_action();
 
         assert!(!manager.can_redo());

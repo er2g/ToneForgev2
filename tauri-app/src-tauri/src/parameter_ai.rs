@@ -32,6 +32,8 @@ pub struct ReaperParameter {
     pub name: String,
     pub current_value: f64,
     pub display_value: String,
+    pub unit: String,
+    pub format_hint: String,
 }
 
 /// Mapping action to apply to REAPER
@@ -380,6 +382,8 @@ mod tests {
                         name: "Gain".to_string(),
                         current_value: 0.5,
                         display_value: "50%".to_string(),
+                        unit: "%".to_string(),
+                        format_hint: "percentage".to_string(),
                     },
                 ],
             }],

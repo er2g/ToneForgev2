@@ -118,6 +118,34 @@ impl ReaperClient {
         Ok(())
     }
 
+    /// FX parametresini index ile ayarla (fuzzy name matching yok)
+    pub async fn set_param_by_index(
+        &self,
+        track: i32,
+        fx: i32,
+        param_index: i32,
+        value: f64,
+    ) -> Result<(), Box<dyn Error>> {
+        let response = self
+            .client
+            .post(&format!("{}/fx/param_index", self.base_url))
+            .json(&json!({
+                "track": track,
+                "fx": fx,
+                "param_index": param_index,
+                "value": value
+            }))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(format!("Failed to set parameter by index: {}", error_text).into());
+        }
+
+        Ok(())
+    }
+
     /// FX parametresini oku
     pub async fn get_param(&self, track: i32, fx: i32, param: &str) -> Result<f64, Box<dyn Error>> {
         let response = self
@@ -130,6 +158,34 @@ impl ReaperClient {
 
         if !response.status().is_success() {
             return Err("Failed to get parameter".into());
+        }
+
+        let json: serde_json::Value = response.json().await?;
+        let value = json["value"].as_f64().ok_or("Invalid value")?;
+        Ok(value)
+    }
+
+    /// FX parametresini index ile oku (fuzzy name matching yok)
+    pub async fn get_param_by_index(
+        &self,
+        track: i32,
+        fx: i32,
+        param_index: i32,
+    ) -> Result<f64, Box<dyn Error>> {
+        let response = self
+            .client
+            .get(&format!("{}/fx/param_index", self.base_url))
+            .query(&[
+                ("track", track.to_string()),
+                ("fx", fx.to_string()),
+                ("param_index", param_index.to_string()),
+            ])
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(format!("Failed to get parameter by index: {}", error_text).into());
         }
 
         let json: serde_json::Value = response.json().await?;

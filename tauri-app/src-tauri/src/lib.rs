@@ -10,6 +10,7 @@
 mod act_mode;
 mod ai_client;
 mod audio;
+mod chain_mapper;
 mod conversation;
 mod dsp;
 mod errors;
@@ -19,10 +20,12 @@ mod reaper_client;
 mod researcher_mode;
 mod secure_storage;
 mod tone_ai;
+mod tone_sanitizer;
 mod tone_encyclopedia;
 mod undo_redo;
 
 use act_mode::ActMode;
+use act_mode::{ActProgressEvent, ActProgressSink};
 use ai_client::AIProvider;
 use audio::analyzer::{analyze_spectrum, AnalysisConfig};
 use audio::loader::{load_audio_file, resample_audio};
@@ -33,8 +36,11 @@ use planner_mode::PlannerMode;
 use reaper_client::ReaperClient;
 use researcher_mode::ResearcherMode;
 use serde::{Deserialize, Serialize};
+use std::collections::VecDeque;
 use std::fs;
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::Manager;
 use tauri::State;
 use tone_encyclopedia::ToneEncyclopedia;
 use undo_redo::{UndoManager, UndoState};
@@ -43,12 +49,23 @@ const ENCYCLOPEDIA_PATH: &str = "tone_encyclopedia.json";
 
 // ==================== APP STATE ====================
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RecentTone {
+    id: String,
+    query: String,
+    summary: String,
+    timestamp: u64,
+    track: i32,
+    changes_count: usize,
+}
+
 struct AppState {
     reaper: Mutex<ReaperClient>,
     ai_provider: Mutex<Option<AIProvider>>,
     tone_encyclopedia: Mutex<ToneEncyclopedia>,
     undo_manager: Mutex<UndoManager>,
     conversation_manager: Mutex<ConversationManager>,
+    recent_tones: Mutex<VecDeque<RecentTone>>,
 }
 
 // ==================== AI CONFIGURATION ====================
@@ -320,6 +337,235 @@ async fn process_act_message(
     })
 }
 
+// ==================== LEGACY UI WRAPPERS (src/App.tsx compatibility) ====================
+
+#[derive(Debug, Deserialize)]
+struct LegacyChangeEntry {
+    plugin: String,
+    parameter: String,
+    old_value: String,
+    new_value: String,
+    reason: String,
+}
+
+#[derive(Debug, Serialize)]
+struct LegacyChatResponse {
+    summary: String,
+    changes_table: Vec<LegacyChangeEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    engine_report: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    action_log: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct UiLogEvent {
+    request_id: String,
+    timestamp_ms: u64,
+    stage: String,
+    level: String,
+    message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    step: Option<act_mode::ProgressStep>,
+}
+
+struct TauriActProgress {
+    app: tauri::AppHandle,
+    request_id: String,
+}
+
+impl ActProgressSink for TauriActProgress {
+    fn emit(&self, event: ActProgressEvent) {
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        let payload = UiLogEvent {
+            request_id: self.request_id.clone(),
+            timestamp_ms: ts,
+            stage: event.stage,
+            level: event.level,
+            message: event.message,
+            details: event.details,
+            step: event.step,
+        };
+        let _ = self.app.emit_all("toneforge:log", payload);
+    }
+}
+
+#[tauri::command]
+async fn get_track_overview(state: State<'_, AppState>) -> Result<String, String> {
+    let reaper = state.reaper.lock().unwrap().clone();
+    let tracks = reaper.get_tracks().await.map_err(|e| e.to_string())?;
+    serde_json::to_string(&tracks).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn set_fx_enabled(
+    track: i32,
+    fx: i32,
+    enabled: bool,
+    state: State<'_, AppState>,
+) -> Result<bool, String> {
+    let reaper = state.reaper.lock().unwrap().clone();
+    reaper
+        .set_fx_enabled(track, fx, enabled)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn save_preset(name: String, state: State<'_, AppState>) -> Result<String, String> {
+    let reaper = state.reaper.lock().unwrap().clone();
+    reaper.save_project(&name).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn get_chat_history() -> Result<String, String> {
+    Ok("[]".to_string())
+}
+
+#[tauri::command]
+fn get_recent_tones(state: State<'_, AppState>) -> Result<String, String> {
+    let tones = state.recent_tones.lock().unwrap();
+    let v: Vec<RecentTone> = tones.iter().cloned().collect();
+    serde_json::to_string(&v).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn clear_recent_tones(state: State<'_, AppState>) -> Result<(), String> {
+    state.recent_tones.lock().unwrap().clear();
+    Ok(())
+}
+
+#[tauri::command]
+fn export_tone_as_text(changes: Vec<LegacyChangeEntry>, summary: String) -> Result<String, String> {
+    let mut out = String::new();
+    out.push_str("ToneForge Export\n");
+    out.push_str("================\n\n");
+    out.push_str(&summary);
+    out.push_str("\n\nChanges\n-------\n");
+    for c in changes {
+        out.push_str(&format!(
+            "- {} :: {}: {} -> {} ({})\n",
+            c.plugin, c.parameter, c.old_value, c.new_value, c.reason
+        ));
+    }
+    Ok(out)
+}
+
+#[tauri::command]
+async fn process_chat_message(
+    request_id: String,
+    message: String,
+    track: i32,
+    custom_instructions: Option<String>,
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+) -> Result<String, String> {
+    let user_message = if let Some(ci) = custom_instructions
+        .as_ref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        format!("{}\n\n[Custom instructions]\n{}", message, ci)
+    } else {
+        message.clone()
+    };
+
+    let ai_provider = {
+        let guard = state.ai_provider.lock().unwrap();
+        guard
+            .clone()
+            .ok_or_else(|| "AI provider not configured".to_string())?
+    };
+
+    let encyclopedia = state.tone_encyclopedia.lock().unwrap().clone();
+    let reaper = state.reaper.lock().unwrap().clone();
+    let act_mode = ActMode::new(encyclopedia, reaper, ai_provider);
+
+    let sink = TauriActProgress {
+        app,
+        request_id: request_id.clone(),
+    };
+
+    let mut undo_manager = state.undo_manager.lock().unwrap();
+    let response = act_mode
+        .process_message_with_progress(&user_message, track, &mut undo_manager, Some(&sink))
+        .await?;
+
+    let last_action = undo_manager.last_undo_action();
+    let mut changes_table: Vec<LegacyChangeEntry> = Vec::new();
+
+    if let Some(action) = last_action {
+        for c in action.parameter_changes {
+            changes_table.push(LegacyChangeEntry {
+                plugin: if c.fx_name.is_empty() {
+                    format!("FX {}", c.fx_index)
+                } else {
+                    c.fx_name
+                },
+                parameter: c.param_name,
+                old_value: format!("{:.1}%", c.old_value * 100.0),
+                new_value: format!("{:.1}%", c.new_value * 100.0),
+                reason: "set".to_string(),
+            });
+        }
+        for t in action.fx_toggles {
+            changes_table.push(LegacyChangeEntry {
+                plugin: t.fx_name,
+                parameter: "enabled".to_string(),
+                old_value: if t.was_enabled { "on" } else { "off" }.to_string(),
+                new_value: if t.was_enabled { "off" } else { "on" }.to_string(),
+                reason: "toggle".to_string(),
+            });
+        }
+    }
+
+    let mut engine_report_lines = Vec::new();
+    engine_report_lines.push(format!("tone_source: {}", response.tone_source));
+    engine_report_lines.push(format!("confidence: {:.0}%", response.confidence * 100.0));
+    if !response.warnings.is_empty() {
+        engine_report_lines.push(String::new());
+        engine_report_lines.push("warnings:".to_string());
+        for w in &response.warnings {
+            engine_report_lines.push(format!("- {}", w));
+        }
+    }
+
+    let summary = format!("{}\n\n{}", response.tone_description, response.summary);
+
+    {
+        let mut recent = state.recent_tones.lock().unwrap();
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        recent.push_back(RecentTone {
+            id: request_id.clone(),
+            query: message,
+            summary: summary.clone(),
+            timestamp: ts,
+            track,
+            changes_count: changes_table.len(),
+        });
+        while recent.len() > 50 {
+            recent.pop_front();
+        }
+    }
+
+    let payload = LegacyChatResponse {
+        summary,
+        changes_table,
+        engine_report: Some(engine_report_lines.join("\n")),
+        action_log: Some(response.action_logs),
+    };
+
+    Ok(serde_json::to_string(&payload).map_err(|e| e.to_string())?)
+}
+
 // ==================== ENCYCLOPEDIA MANAGEMENT ====================
 
 #[tauri::command]
@@ -406,12 +652,7 @@ async fn perform_undo(state: State<'_, AppState>) -> Result<String, String> {
 
     for change in &action.parameter_changes {
         if let Err(e) = reaper
-            .set_param(
-                change.track,
-                change.fx_index,
-                &change.param_name,
-                change.old_value,
-            )
+            .set_param_by_index(change.track, change.fx_index, change.param_index, change.old_value)
             .await
         {
             eprintln!("[UNDO] Failed to revert param: {}", e);
@@ -450,12 +691,7 @@ async fn perform_redo(state: State<'_, AppState>) -> Result<String, String> {
 
     for change in &action.parameter_changes {
         if let Err(e) = reaper
-            .set_param(
-                change.track,
-                change.fx_index,
-                &change.param_name,
-                change.new_value,
-            )
+            .set_param_by_index(change.track, change.fx_index, change.param_index, change.new_value)
             .await
         {
             eprintln!("[REDO] Failed to reapply param: {}", e);
@@ -571,6 +807,7 @@ pub fn run() {
             tone_encyclopedia: Mutex::new(encyclopedia),
             undo_manager: Mutex::new(UndoManager::new()),
             conversation_manager: Mutex::new(ConversationManager::new()),
+            recent_tones: Mutex::new(VecDeque::new()),
         })
         .invoke_handler(tauri::generate_handler![
             // Connection
@@ -602,6 +839,15 @@ pub fn run() {
             load_api_config,
             delete_api_config,
             has_saved_api_config,
+            // Legacy UI wrappers
+            get_track_overview,
+            set_fx_enabled,
+            save_preset,
+            export_tone_as_text,
+            get_chat_history,
+            get_recent_tones,
+            clear_recent_tones,
+            process_chat_message,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

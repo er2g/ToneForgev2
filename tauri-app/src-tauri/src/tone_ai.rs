@@ -7,6 +7,7 @@
 use crate::ai_client::AIProvider;
 use crate::tone_encyclopedia::{SearchResult, ToneEncyclopedia, ToneEntry, ToneParameters};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::error::Error;
 
 const SEARCH_LIMIT: usize = 5;
@@ -130,6 +131,10 @@ When given a tone request, respond with a JSON object containing:
 1. A description of the tone
 2. Precise parameter values (0.0 to 1.0 range)
 
+REQUIREMENTS:
+- If the user explicitly asks for an effect category (delay, reverb, noise gate, EQ), include that section with at least one meaningful parameter.
+- If the user explicitly says to keep that category OFF/bypassed, leave that section empty (or omit it).
+
 Example output:
 ```json
 {
@@ -170,6 +175,7 @@ IMPORTANT:
 - All amp/effect parameters must be normalized to 0.0-1.0 range
 - EQ values are in dB (-12.0 to +12.0)
 - Be precise and consistent
+- Do NOT add extra sections or effects that the user did not ask for.
 - Respond ONLY with valid JSON
 "#;
 
@@ -178,7 +184,49 @@ IMPORTANT:
         let response = provider.generate(system_prompt, &user_prompt).await?;
 
         // Parse JSON from response
-        let parsed = self.parse_ai_tone_response(&response)?;
+        let mut parsed = self.parse_ai_tone_response(&response)?;
+
+        // Validate required sections and attempt a single repair pass if the model omitted requested parts.
+        let req = detect_requested_sections(user_message);
+        let issues = validate_sections(&req, &parsed.parameters);
+        if !issues.is_empty() {
+            println!("[TONE AI] Model output missing requested sections; attempting repair: {:?}", issues);
+            let repair_prompt = format!(
+                "{}\n\nYour previous JSON output was missing required sections: {}\nReturn corrected JSON ONLY.\n\nPrevious output:\n{}",
+                user_prompt,
+                issues.join(", "),
+                response
+            );
+            if let Ok(repair_response) = provider.generate(system_prompt, &repair_prompt).await {
+                if let Ok(repair_parsed) = self.parse_ai_tone_response(&repair_response) {
+                    let issues2 = validate_sections(&req, &repair_parsed.parameters);
+                    if issues2.is_empty() {
+                        parsed = repair_parsed;
+                    } else {
+                        println!(
+                            "[TONE AI] Repair attempt still missing sections: {:?} (keeping repair output)",
+                            issues2
+                        );
+                        parsed = repair_parsed;
+                    }
+                } else {
+                    println!("[TONE AI] Repair attempt produced unparsable JSON; keeping original output");
+                }
+            } else {
+                println!("[TONE AI] Repair attempt failed; keeping original output");
+            }
+        }
+
+        // Prune any unrequested sections/effects to keep the apply-side AI focused and deterministic.
+        let pruned = prune_unrequested(&req, &mut parsed.parameters);
+        if !pruned.is_empty() {
+            println!("[TONE AI] Pruned unrequested sections/effects: {:?}", pruned);
+        }
+
+        let mix_adj = apply_mix_heuristics(user_message, &mut parsed.parameters);
+        if !mix_adj.is_empty() {
+            println!("[TONE AI] Mix heuristics applied: {:?}", mix_adj);
+        }
 
         Ok(ToneAIResult {
             source: if context.is_empty() {
@@ -227,6 +275,196 @@ IMPORTANT:
     pub fn search_encyclopedia(&self, query: &str) -> Vec<SearchResult> {
         self.encyclopedia.search(query, SEARCH_LIMIT)
     }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct RequestedSections {
+    delay: bool,
+    reverb: bool,
+    gate: bool,
+    eq: bool,
+    overdrive: bool,
+    distortion: bool,
+    compressor: bool,
+    chorus: bool,
+}
+
+fn detect_requested_sections(user_message: &str) -> RequestedSections {
+    let s = user_message.to_lowercase();
+
+    fn has_any(s: &str, needles: &[&str]) -> bool {
+        needles.iter().any(|n| s.contains(n))
+    }
+
+    fn has_negation(s: &str, label: &str) -> bool {
+        // Lightweight negation heuristics for common instructions.
+        let patterns = [
+            format!("no {}", label),
+            format!("without {}", label),
+            format!("{} off", label),
+            format!("{} bypass", label),
+            format!("{} bypassed", label),
+            format!("keep {} off", label),
+            format!("keep {} bypass", label),
+            format!("{} kapalı", label),
+        ];
+        patterns.iter().any(|p| s.contains(p))
+    }
+
+    let delay = has_any(&s, &["delay", "echo", "slapback"]) && !has_negation(&s, "delay");
+    let reverb = has_any(&s, &["reverb", "room", "hall"]) && !has_negation(&s, "reverb");
+    let gate = has_any(&s, &["noise gate", "gate"]) && !has_negation(&s, "gate");
+    let eq = (has_any(&s, &[" eq", "equalizer", "hz"]) || s.starts_with("eq")) && !has_negation(&s, "eq");
+
+    let overdrive = has_any(&s, &["overdrive", "tubescreamer", "tube screamer", "screamer", "od"])
+        && !has_negation(&s, "overdrive")
+        && !has_negation(&s, "tubescreamer");
+    let distortion = has_any(&s, &["distortion", "fuzz", "hm-2", "hm2"])
+        && !has_negation(&s, "distortion")
+        && !has_negation(&s, "fuzz");
+    let compressor =
+        has_any(&s, &["compressor", "compression", "comp"]) && !has_negation(&s, "compressor");
+    let chorus = has_any(&s, &["chorus", "modulation"]) && !has_negation(&s, "chorus");
+
+    RequestedSections {
+        delay,
+        reverb,
+        gate,
+        eq,
+        overdrive,
+        distortion,
+        compressor,
+        chorus,
+    }
+}
+
+fn validate_sections(req: &RequestedSections, params: &ToneParameters) -> Vec<String> {
+    let mut issues = Vec::new();
+    if req.delay && params.delay.is_empty() {
+        issues.push("delay".to_string());
+    }
+    if req.reverb && params.reverb.is_empty() {
+        issues.push("reverb".to_string());
+    }
+    if req.eq && params.eq.is_empty() {
+        issues.push("eq".to_string());
+    }
+    if req.gate {
+        let has_gate = params
+            .effects
+            .iter()
+            .any(|e| e.effect_type.to_lowercase().contains("gate"));
+        if !has_gate {
+            issues.push("noise_gate".to_string());
+        }
+    }
+    issues
+}
+
+fn prune_unrequested(req: &RequestedSections, params: &mut ToneParameters) -> Vec<String> {
+    let mut pruned = Vec::new();
+
+    if !req.delay && !params.delay.is_empty() {
+        params.delay.clear();
+        pruned.push("delay".to_string());
+    }
+    if !req.reverb && !params.reverb.is_empty() {
+        params.reverb.clear();
+        pruned.push("reverb".to_string());
+    }
+    if !req.eq && !params.eq.is_empty() {
+        params.eq.clear();
+        pruned.push("eq".to_string());
+    }
+
+    let had_effects = !params.effects.is_empty();
+    params.effects.retain(|e| {
+        let t = e.effect_type.to_lowercase();
+        let is_gate = t.contains("gate");
+        let is_overdrive = t.contains("overdrive") || t.contains("tubescreamer") || t.contains("screamer") || t == "od";
+        let is_distortion = t.contains("dist") || t.contains("fuzz") || t.contains("hm-2") || t.contains("hm2");
+        let is_compressor = t.contains("compress");
+        let is_chorus = t.contains("chorus");
+
+        if is_gate && !req.gate {
+            return false;
+        }
+        if is_overdrive && !req.overdrive {
+            return false;
+        }
+        if is_distortion && !req.distortion {
+            return false;
+        }
+        if is_compressor && !req.compressor {
+            return false;
+        }
+        if is_chorus && !req.chorus {
+            return false;
+        }
+        true
+    });
+
+    if had_effects && params.effects.is_empty() && !(req.gate || req.overdrive || req.distortion || req.compressor || req.chorus) {
+        pruned.push("effects".to_string());
+    }
+
+    pruned
+}
+
+fn apply_mix_heuristics(user_message: &str, params: &mut ToneParameters) -> Vec<String> {
+    let s = user_message.to_lowercase();
+    let mut notes = Vec::new();
+
+    fn clamp(map: &mut HashMap<String, f64>, key: &str, min: Option<f64>, max: Option<f64>) -> Option<(f64, f64)> {
+        let v = map.get_mut(key)?;
+        let before = *v;
+        if let Some(mx) = max {
+            if *v > mx {
+                *v = mx;
+            }
+        }
+        if let Some(mn) = min {
+            if *v < mn {
+                *v = mn;
+            }
+        }
+        if (before - *v).abs() > f64::EPSILON {
+            Some((before, *v))
+        } else {
+            None
+        }
+    }
+
+    let very_low = s.contains("very low mix")
+        || s.contains("super low mix")
+        || s.contains("çok düşük")
+        || s.contains("cok dusuk")
+        || s.contains("çok az")
+        || s.contains("cok az");
+    let low = very_low
+        || s.contains("low mix")
+        || s.contains("subtle")
+        || s.contains("very subtle")
+        || s.contains("just a little")
+        || s.contains("tiny")
+        || s.contains("do not wash")
+        || s.contains("avoid washing");
+
+    if low && !params.delay.is_empty() {
+        let max = if very_low { 0.12 } else { 0.20 };
+        if let Some((b, a)) = clamp(&mut params.delay, "mix", None, Some(max)) {
+            notes.push(format!("delay.mix {:.2} -> {:.2}", b, a));
+        }
+    }
+
+    if low && !params.reverb.is_empty() {
+        let max = if very_low { 0.12 } else { 0.15 };
+        if let Some((b, a)) = clamp(&mut params.reverb, "mix", None, Some(max)) {
+            notes.push(format!("reverb.mix {:.2} -> {:.2}", b, a));
+        }
+    }
+
+    notes
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

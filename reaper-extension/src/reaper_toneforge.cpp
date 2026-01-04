@@ -434,6 +434,122 @@ void SetupHTTPEndpoints() {
             res.set_content(error.dump(), "application/json");
         }
     });
+
+    // Set FX parameter by index (no fuzzy name matching)
+    g_server.Post("/fx/param_index", [](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(g_api_mutex);
+
+        try {
+            json body = json::parse(req.body);
+
+            int track_idx = body.value("track", 0);
+            int fx_idx = body.value("fx", 0);
+            int param_idx = body.value("param_index", -1);
+            double value = body.value("value", 0.0);
+
+            if (param_idx < 0) {
+                res.status = 400;
+                res.set_content(R"({"error":"param_index is required"})", "application/json");
+                return;
+            }
+
+            MediaTrack* track = p_GetTrack(nullptr, track_idx);
+            if (!track) {
+                res.status = 404;
+                res.set_content(R"({"error":"Track not found"})", "application/json");
+                return;
+            }
+
+            int fx_count = p_TrackFX_GetCount(track);
+            if (fx_idx < 0 || fx_idx >= fx_count) {
+                res.status = 404;
+                res.set_content(R"({"error":"FX not found"})", "application/json");
+                return;
+            }
+
+            int param_count = p_TrackFX_GetNumParams(track, fx_idx);
+            if (param_idx < 0 || param_idx >= param_count) {
+                res.status = 404;
+                res.set_content(R"({"error":"Parameter index out of range"})", "application/json");
+                return;
+            }
+
+            p_TrackFX_SetParamNormalized(track, fx_idx, param_idx, value);
+
+            char param_name[256] = {0};
+            if (p_TrackFX_GetParamName) {
+                p_TrackFX_GetParamName(track, fx_idx, param_idx, param_name, 256);
+            }
+
+            json response = {
+                {"success", true},
+                {"track", track_idx},
+                {"fx", fx_idx},
+                {"param_index", param_idx},
+                {"param_name", std::string(param_name)},
+                {"value", value}
+            };
+
+            res.set_content(response.dump(), "application/json");
+        } catch (const std::exception& e) {
+            res.status = 400;
+            json error = {{"error", e.what()}};
+            res.set_content(error.dump(), "application/json");
+        }
+    });
+
+    // Get FX parameter by index (no fuzzy name matching)
+    g_server.Get("/fx/param_index", [](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(g_api_mutex);
+
+        try {
+            int track_idx = std::stoi(req.get_param_value("track"));
+            int fx_idx = std::stoi(req.get_param_value("fx"));
+            int param_idx = std::stoi(req.get_param_value("param_index"));
+
+            MediaTrack* track = p_GetTrack(nullptr, track_idx);
+            if (!track) {
+                res.status = 404;
+                res.set_content(R"({"error":"Track not found"})", "application/json");
+                return;
+            }
+
+            int fx_count = p_TrackFX_GetCount(track);
+            if (fx_idx < 0 || fx_idx >= fx_count) {
+                res.status = 404;
+                res.set_content(R"({"error":"FX not found"})", "application/json");
+                return;
+            }
+
+            int param_count = p_TrackFX_GetNumParams(track, fx_idx);
+            if (param_idx < 0 || param_idx >= param_count) {
+                res.status = 404;
+                res.set_content(R"({"error":"Parameter index out of range"})", "application/json");
+                return;
+            }
+
+            double value = p_TrackFX_GetParamNormalized(track, fx_idx, param_idx);
+
+            char param_name[256] = {0};
+            if (p_TrackFX_GetParamName) {
+                p_TrackFX_GetParamName(track, fx_idx, param_idx, param_name, 256);
+            }
+
+            json response = {
+                {"track", track_idx},
+                {"fx", fx_idx},
+                {"param_index", param_idx},
+                {"param_name", std::string(param_name)},
+                {"value", value}
+            };
+
+            res.set_content(response.dump(), "application/json");
+        } catch (const std::exception& e) {
+            res.status = 400;
+            json error = {{"error", e.what()}};
+            res.set_content(error.dump(), "application/json");
+        }
+    });
     
     // Get FX parameter value
     g_server.Get("/fx/param", [](const httplib::Request& req, httplib::Response& res) {
