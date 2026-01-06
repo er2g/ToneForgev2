@@ -31,6 +31,7 @@
 #define REAPERAPI_WANT_TrackFX_GetFormattedParamValue
 #define REAPERAPI_WANT_TrackFX_AddByName
 #define REAPERAPI_WANT_TrackFX_Delete
+#define REAPERAPI_WANT_TrackFX_CopyToTrack
 #define REAPERAPI_WANT_EnumInstalledFX
 #define REAPERAPI_WANT_InsertTrackAtIndex
 #define REAPERAPI_WANT_DeleteTrack
@@ -656,6 +657,68 @@ void SetupHTTPEndpoints() {
             
             res.set_content(response.dump(), "application/json");
             
+        } catch (const std::exception& e) {
+            res.status = 400;
+            json error = {{"error", e.what()}};
+            res.set_content(error.dump(), "application/json");
+        }
+    });
+
+    // Move FX within a track (reorder)
+    // Body: {"track":0,"from_fx":2,"to_fx":0}
+    g_server.Post("/fx/move", [](const httplib::Request& req, httplib::Response& res) {
+        std::lock_guard<std::mutex> lock(g_api_mutex);
+
+        try {
+            json body = json::parse(req.body);
+
+            int track_idx = body.value("track", 0);
+            int from_fx = body.value("from_fx", -1);
+            int to_fx = body.value("to_fx", -1);
+
+            if (from_fx < 0 || to_fx < 0) {
+                res.status = 400;
+                res.set_content(R"({"error":"from_fx and to_fx must be >= 0"})", "application/json");
+                return;
+            }
+
+            MediaTrack* track = p_GetTrack(nullptr, track_idx);
+            if (!track) {
+                res.status = 404;
+                res.set_content(R"({"error":"Track not found"})", "application/json");
+                return;
+            }
+
+            if (!p_TrackFX_CopyToTrack) {
+                res.status = 500;
+                res.set_content(R"({"error":"TrackFX_CopyToTrack not available"})", "application/json");
+                return;
+            }
+
+            int fx_count = p_TrackFX_GetCount(track);
+            if (from_fx >= fx_count || to_fx >= fx_count) {
+                res.status = 400;
+                json error = {
+                    {"error", "FX index out of range"},
+                    {"fx_count", fx_count},
+                    {"from_fx", from_fx},
+                    {"to_fx", to_fx}
+                };
+                res.set_content(error.dump(), "application/json");
+                return;
+            }
+
+            // Move within the same track. REAPER shifts indices appropriately.
+            // is_move=true to avoid duplication.
+            bool ok = p_TrackFX_CopyToTrack(track, from_fx, track, to_fx, true);
+
+            json response = {
+                {"success", ok},
+                {"track", track_idx},
+                {"from_fx", from_fx},
+                {"to_fx", to_fx}
+            };
+            res.set_content(response.dump(), "application/json");
         } catch (const std::exception& e) {
             res.status = 400;
             json error = {{"error", e.what()}};

@@ -35,3 +35,4 @@ rayon = "1.8"
 urlencoding = "2.1"
 uuid = { version = "1", features = ["v4"] }
 dirs = "5.0"
+toneforge-core = { path = "../../toneforge-core" }

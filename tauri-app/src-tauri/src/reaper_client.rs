@@ -220,6 +220,45 @@ impl ReaperClient {
         Ok(fx_index)
     }
 
+    /// FX sırasını değiştir (reorder)
+    pub async fn move_fx(&self, track: i32, from_fx: i32, to_fx: i32) -> Result<bool, Box<dyn Error>> {
+        let response = self
+            .client
+            .post(&format!("{}/fx/move", self.base_url))
+            .json(&json!({
+                "track": track,
+                "from_fx": from_fx,
+                "to_fx": to_fx
+            }))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(format!("Failed to move FX: {}", error_text).into());
+        }
+
+        let json: serde_json::Value = response.json().await?;
+        Ok(json["success"].as_bool().unwrap_or(false))
+    }
+
+    /// Kurulu FX kataloğunu al (param meta dahil)
+    pub async fn get_fx_catalog(&self, refresh: bool) -> Result<serde_json::Value, Box<dyn Error>> {
+        let response = self
+            .client
+            .get(&format!("{}/fx/catalog", self.base_url))
+            .query(&[("refresh", if refresh { "1" } else { "0" })])
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let error_text = response.text().await?;
+            return Err(format!("Failed to get FX catalog: {}", error_text).into());
+        }
+
+        Ok(response.json::<serde_json::Value>().await?)
+    }
+
     /// Plugin sil
     pub async fn remove_plugin(&self, track: i32, fx: i32) -> Result<(), Box<dyn Error>> {
         let response = self

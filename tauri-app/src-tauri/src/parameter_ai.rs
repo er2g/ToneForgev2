@@ -79,6 +79,13 @@ pub enum ParameterAction {
         position: Option<i32>,
         reason: String,
     },
+    #[serde(rename = "move_plugin")]
+    MovePlugin {
+        track: i32,
+        from_plugin_index: i32,
+        to_plugin_index: i32,
+        reason: String,
+    },
 }
 
 /// Result from Tier 2 Parameter AI
@@ -195,7 +202,8 @@ Output JSON schema:
   "actions": [
     {{"type":"enable_plugin","track":0,"plugin_index":0,"plugin_name":"...","reason":"..."}},
     {{"type":"set_param","track":0,"plugin_index":0,"param_index":1,"param_name":"...","value":0.5,"reason":"..."}},
-    {{"type":"load_plugin","track":0,"plugin_name":"...","position":null,"reason":"..."}}
+    {{"type":"load_plugin","track":0,"plugin_name":"...","position":null,"reason":"..."}},
+    {{"type":"move_plugin","track":0,"from_plugin_index":2,"to_plugin_index":0,"reason":"Reorder for better signal flow"}}
   ],
   "warnings": []
 }}
@@ -293,6 +301,7 @@ Return ONLY valid JSON. No markdown."#,
         prompt.push_str("\n=== YOUR TASK ===\n");
         prompt.push_str("Map the tone parameters to the available REAPER plugins.\n");
         prompt.push_str("Generate actions to achieve the target tone precisely.\n");
+        prompt.push_str("You may improve signal flow by reordering plugins using move_plugin when it helps the tone.\n");
         if let Some(extra) = additional_instructions
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
@@ -421,6 +430,22 @@ Return ONLY valid JSON. No markdown."#,
                     }
                     if plugin_name.trim().is_empty() {
                         issues.push("LoadPlugin has empty plugin_name".to_string());
+                    }
+                }
+                ParameterAction::MovePlugin {
+                    track,
+                    from_plugin_index,
+                    to_plugin_index,
+                    ..
+                } => {
+                    if *track != reaper_snapshot.track_index {
+                        issues.push(format!(
+                            "MovePlugin uses track {} but snapshot track is {}",
+                            track, reaper_snapshot.track_index
+                        ));
+                    }
+                    if *from_plugin_index < 0 || *to_plugin_index < 0 {
+                        issues.push("MovePlugin indices must be >= 0".to_string());
                     }
                 }
             }

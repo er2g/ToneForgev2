@@ -8,6 +8,7 @@
 //! Each mode operates in independent conversation rooms!
 
 mod act_mode;
+mod ai_chain_orchestrator;
 mod ai_client;
 mod audio;
 mod chain_mapper;
@@ -22,7 +23,7 @@ mod secure_storage;
 mod tone_ai;
 mod tone_sanitizer;
 mod tone_encyclopedia;
-mod undo_redo;
+// undo/redo types live in toneforge-core (testable without tauri deps)
 
 use act_mode::ActMode;
 use act_mode::{ActProgressEvent, ActProgressSink};
@@ -45,7 +46,7 @@ use tokio::sync::Mutex as AsyncMutex;
 use std::sync::Arc;
 use tauri::State;
 use tone_encyclopedia::ToneEncyclopedia;
-use undo_redo::{UndoManager, UndoState};
+use toneforge_core::{UndoManager, UndoState};
 
 const ENCYCLOPEDIA_PATH: &str = "tone_encyclopedia.json";
 
@@ -675,6 +676,10 @@ async fn perform_undo(state: State<'_, AppState>) -> Result<String, String> {
 
     let reaper = state.reaper.lock().unwrap().clone();
 
+    // Revert in an order that keeps indices as stable as possible:
+    // - parameters, toggles
+    // - moves (reverse)
+    // - plugin loads/removals (reverse)
     for change in &action.parameter_changes {
         if let Err(e) = reaper
             .set_param_by_index(change.track, change.fx_index, change.param_index, change.old_value)
@@ -690,6 +695,24 @@ async fn perform_undo(state: State<'_, AppState>) -> Result<String, String> {
             .await
         {
             eprintln!("[UNDO] Failed to revert toggle: {}", e);
+        }
+    }
+
+    for mv in action.fx_moves.iter().rev() {
+        if let Err(e) = reaper.move_fx(mv.track, mv.to_fx_index, mv.from_fx_index).await {
+            eprintln!("[UNDO] Failed to revert FX move: {}", e);
+        }
+    }
+
+    for change in action.plugin_changes.iter().rev() {
+        if change.was_loaded {
+            if let Err(e) = reaper.remove_plugin(change.track, change.fx_index).await {
+                eprintln!("[UNDO] Failed to remove loaded plugin: {}", e);
+            }
+        } else {
+            if let Err(e) = reaper.add_plugin(change.track, &change.plugin_name).await {
+                eprintln!("[UNDO] Failed to restore removed plugin: {}", e);
+            }
         }
     }
 
@@ -729,6 +752,24 @@ async fn perform_redo(state: State<'_, AppState>) -> Result<String, String> {
             .await
         {
             eprintln!("[REDO] Failed to reapply toggle: {}", e);
+        }
+    }
+
+    for change in &action.plugin_changes {
+        if change.was_loaded {
+            if let Err(e) = reaper.add_plugin(change.track, &change.plugin_name).await {
+                eprintln!("[REDO] Failed to re-add plugin: {}", e);
+            }
+        } else {
+            if let Err(e) = reaper.remove_plugin(change.track, change.fx_index).await {
+                eprintln!("[REDO] Failed to re-remove plugin: {}", e);
+            }
+        }
+    }
+
+    for mv in &action.fx_moves {
+        if let Err(e) = reaper.move_fx(mv.track, mv.from_fx_index, mv.to_fx_index).await {
+            eprintln!("[REDO] Failed to reapply FX move: {}", e);
         }
     }
 

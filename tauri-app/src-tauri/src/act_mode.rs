@@ -7,14 +7,13 @@
 //! FULL REAPER access - applies changes!
 
 use crate::ai_client::AIProvider;
-use crate::parameter_ai::{
-    ParameterAI, ParameterAIOptions, ParameterAction, ReaperParameter, ReaperPlugin, ReaperSnapshot,
-};
+use crate::ai_chain_orchestrator::{AIChainOrchestrator, OrchestratorConfig};
+use crate::parameter_ai::{ParameterAction, ReaperParameter, ReaperPlugin, ReaperSnapshot};
 use crate::reaper_client::ReaperClient;
 use crate::tone_ai::ToneAI;
 use crate::tone_sanitizer;
 use crate::tone_encyclopedia::ToneEncyclopedia;
-use crate::undo_redo::UndoManager;
+use toneforge_core::UndoManager;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use serde_json::Value;
@@ -176,28 +175,20 @@ impl ActMode {
         println!("\n[TIER 2] Running Parameter AI...");
         emit(progress, "map", "info", "Mapping tone parameters to REAPER actions (AI)", None, None);
 
-        let parameter_ai = ParameterAI::new(self.ai_provider.clone());
-
-        let phase1_opts = ParameterAIOptions {
-            allow_load_plugins: true,
-            max_actions: 180,
-            phase_name: "phase1".to_string(),
-        };
-        let phase1 = parameter_ai
-            .map_parameters_with_options(
+        let orchestrator = AIChainOrchestrator::new(
+            self.reaper_client.clone(),
+            self.ai_provider.clone(),
+            OrchestratorConfig::default(),
+        );
+        let (phase1, requires_resnapshot) = orchestrator
+            .plan_phase1(
                 &tone_params,
                 &reaper_snapshot,
                 &tone_result.tone_description,
-                &phase1_opts,
-                Some("If you include any load_plugin actions, do NOT set parameters on newly loaded plugins in this phase."),
+                user_message,
+                progress,
             )
-            .await
-            .map_err(|e| format!("Parameter AI error: {}", e))?;
-
-        let requires_resnapshot = phase1
-            .actions
-            .iter()
-            .any(|a| matches!(a, ParameterAction::LoadPlugin { .. }));
+            .await?;
 
         emit(
             progress,
@@ -257,19 +248,8 @@ impl ActMode {
                 None,
             );
 
-            let phase2_opts = ParameterAIOptions {
-                allow_load_plugins: false,
-                max_actions: 220,
-                phase_name: "phase2".to_string(),
-            };
-            let phase2 = match parameter_ai
-                .map_parameters_with_options(
-                    &tone_params,
-                    &refreshed,
-                    &tone_result.tone_description,
-                    &phase2_opts,
-                    Some("Do NOT include load_plugin actions. Use the now-available plugins in the snapshot."),
-                )
+            let phase2 = match orchestrator
+                .plan_phase2(&tone_params, &refreshed, &tone_result.tone_description, progress)
                 .await
             {
                 Ok(v) => v,
@@ -580,10 +560,16 @@ impl ActMode {
                     track,
                     plugin_name,
                     reason,
+                    position,
                     ..
                 } => {
                     let slot = self.reaper_client.add_plugin(*track, plugin_name).await?;
                     undo_manager.record_plugin_change(*track, slot, plugin_name, true);
+                    if let Some(target) = position {
+                        if *target >= 0 && *target != slot {
+                            let _ = self.reaper_client.move_fx(*track, slot, *target).await;
+                        }
+                    }
                     emit(
                         progress,
                         "apply",
@@ -603,6 +589,37 @@ impl ActMode {
                     logs.push(format!(
                         "✓ Loaded '{}' at slot {} - {}",
                         plugin_name, slot, reason
+                    ));
+                }
+                ParameterAction::MovePlugin {
+                    track,
+                    from_plugin_index,
+                    to_plugin_index,
+                    reason,
+                } => {
+                    undo_manager.record_fx_move(*track, *from_plugin_index, *to_plugin_index);
+                    let _ = self
+                        .reaper_client
+                        .move_fx(*track, *from_plugin_index, *to_plugin_index)
+                        .await?;
+                    emit(
+                        progress,
+                        "apply",
+                        "info",
+                        "Moved plugin",
+                        Some(json!({
+                            "from": from_plugin_index,
+                            "to": to_plugin_index,
+                            "reason": reason,
+                        })),
+                        Some(ProgressStep {
+                            current: idx + 1,
+                            total: actions.len(),
+                        }),
+                    );
+                    logs.push(format!(
+                        "✓ Moved FX {} -> {} - {}",
+                        from_plugin_index, to_plugin_index, reason
                     ));
                 }
             }

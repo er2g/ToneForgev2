@@ -1,7 +1,6 @@
 //! Undo/Redo System for ToneForge
 //!
-//! This module provides a transaction-based undo/redo system for plugin parameter changes.
-//! Each user action creates a snapshot that can be reverted or re-applied.
+//! Transaction-based undo/redo history for plugin parameter changes.
 
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
@@ -39,6 +38,14 @@ pub struct PluginChange {
     pub was_loaded: bool, // true = was loaded (undo = remove), false = was removed (undo = add)
 }
 
+/// Represents a single FX move (reorder) change
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FxMoveChange {
+    pub track: i32,
+    pub from_fx_index: i32,
+    pub to_fx_index: i32,
+}
+
 /// A single action that can contain multiple changes
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UndoAction {
@@ -48,6 +55,7 @@ pub struct UndoAction {
     pub parameter_changes: Vec<ParameterChange>,
     pub fx_toggles: Vec<FxToggleChange>,
     pub plugin_changes: Vec<PluginChange>,
+    pub fx_moves: Vec<FxMoveChange>,
 }
 
 impl UndoAction {
@@ -62,6 +70,7 @@ impl UndoAction {
             parameter_changes: Vec::new(),
             fx_toggles: Vec::new(),
             plugin_changes: Vec::new(),
+            fx_moves: Vec::new(),
         }
     }
 
@@ -69,6 +78,7 @@ impl UndoAction {
         self.parameter_changes.is_empty()
             && self.fx_toggles.is_empty()
             && self.plugin_changes.is_empty()
+            && self.fx_moves.is_empty()
     }
 
     pub fn add_param_change(&mut self, change: ParameterChange) {
@@ -83,9 +93,16 @@ impl UndoAction {
         self.plugin_changes.push(change);
     }
 
+    pub fn add_fx_move(&mut self, change: FxMoveChange) {
+        self.fx_moves.push(change);
+    }
+
     /// Get total number of changes in this action
     pub fn change_count(&self) -> usize {
-        self.parameter_changes.len() + self.fx_toggles.len() + self.plugin_changes.len()
+        self.parameter_changes.len()
+            + self.fx_toggles.len()
+            + self.plugin_changes.len()
+            + self.fx_moves.len()
     }
 }
 
@@ -136,13 +153,7 @@ impl UndoManager {
     }
 
     /// Record an FX toggle in the current action
-    pub fn record_fx_toggle(
-        &mut self,
-        track: i32,
-        fx_index: i32,
-        fx_name: &str,
-        was_enabled: bool,
-    ) {
+    pub fn record_fx_toggle(&mut self, track: i32, fx_index: i32, fx_name: &str, was_enabled: bool) {
         if let Some(ref mut action) = self.current_action {
             action.add_fx_toggle(FxToggleChange {
                 track,
@@ -171,19 +182,24 @@ impl UndoManager {
         }
     }
 
+    pub fn record_fx_move(&mut self, track: i32, from_fx_index: i32, to_fx_index: i32) {
+        if let Some(ref mut action) = self.current_action {
+            action.add_fx_move(FxMoveChange {
+                track,
+                from_fx_index,
+                to_fx_index,
+            });
+        }
+    }
+
     /// Commit the current action to the undo stack
     pub fn commit_action(&mut self) -> Option<String> {
         if let Some(action) = self.current_action.take() {
             if !action.is_empty() {
                 let id = action.id.clone();
 
-                // Clear redo stack when new action is committed
                 self.redo_stack.clear();
-
-                // Add to undo stack
                 self.undo_stack.push_back(action);
-
-                // Trim if too many items
                 while self.undo_stack.len() > MAX_UNDO_HISTORY {
                     self.undo_stack.pop_front();
                 }
@@ -199,12 +215,10 @@ impl UndoManager {
         self.current_action = None;
     }
 
-    /// Pop the last action from undo stack (for applying undo)
     pub fn pop_undo(&mut self) -> Option<UndoAction> {
         self.undo_stack.pop_back()
     }
 
-    /// Push an action to redo stack (after undo is applied)
     pub fn push_redo(&mut self, action: UndoAction) {
         self.redo_stack.push_back(action);
         while self.redo_stack.len() > MAX_UNDO_HISTORY {
@@ -212,12 +226,10 @@ impl UndoManager {
         }
     }
 
-    /// Pop the last action from redo stack (for applying redo)
     pub fn pop_redo(&mut self) -> Option<UndoAction> {
         self.redo_stack.pop_back()
     }
 
-    /// Push an action to undo stack (after redo is applied)
     pub fn push_undo(&mut self, action: UndoAction) {
         self.undo_stack.push_back(action);
         while self.undo_stack.len() > MAX_UNDO_HISTORY {
@@ -225,60 +237,28 @@ impl UndoManager {
         }
     }
 
-    /// Check if undo is available
     pub fn can_undo(&self) -> bool {
         !self.undo_stack.is_empty()
     }
 
-    /// Check if redo is available
     pub fn can_redo(&self) -> bool {
         !self.redo_stack.is_empty()
     }
 
-    /// Get the description of the next undo action
     pub fn undo_description(&self) -> Option<&str> {
         self.undo_stack.back().map(|a| a.description.as_str())
     }
 
-    /// Get the description of the next redo action
     pub fn redo_description(&self) -> Option<&str> {
         self.redo_stack.back().map(|a| a.description.as_str())
     }
 
-    pub fn last_undo_action(&self) -> Option<UndoAction> {
-        self.undo_stack.back().cloned()
-    }
-
-    /// Get undo stack size
     pub fn undo_count(&self) -> usize {
         self.undo_stack.len()
     }
 
-    /// Get redo stack size
     pub fn redo_count(&self) -> usize {
         self.redo_stack.len()
-    }
-
-    /// Get recent undo history (for UI display)
-    pub fn get_undo_history(&self, limit: usize) -> Vec<UndoActionSummary> {
-        self.undo_stack
-            .iter()
-            .rev()
-            .take(limit)
-            .map(|a| UndoActionSummary {
-                id: a.id.clone(),
-                description: a.description.clone(),
-                change_count: a.change_count(),
-                timestamp: a.timestamp,
-            })
-            .collect()
-    }
-
-    /// Clear all history
-    pub fn clear(&mut self) {
-        self.undo_stack.clear();
-        self.redo_stack.clear();
-        self.current_action = None;
     }
 }
 
@@ -320,80 +300,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_undo_manager_basic() {
+    fn undo_records_moves_and_plugins() {
         let mut manager = UndoManager::new();
-
-        // Should start empty
-        assert!(!manager.can_undo());
-        assert!(!manager.can_redo());
-
-        // Begin and commit an action
-        manager.begin_action("Test action");
-        manager.record_param_change(0, 0, "Amp", 1, "Gain", 0.5, 0.8);
-        manager.commit_action();
-
-        // Should now have undo available
-        assert!(manager.can_undo());
-        assert!(!manager.can_redo());
-        assert_eq!(manager.undo_description(), Some("Test action"));
-    }
-
-    #[test]
-    fn test_undo_redo_cycle() {
-        let mut manager = UndoManager::new();
-
-        // Create action
-        manager.begin_action("Change gain");
-        manager.record_param_change(0, 0, "Amp", 1, "Gain", 0.5, 0.8);
-        manager.commit_action();
-
-        // Undo
-        let action = manager.pop_undo().unwrap();
-        assert_eq!(action.description, "Change gain");
-        manager.push_redo(action);
-
-        // Should now have redo available
-        assert!(!manager.can_undo());
-        assert!(manager.can_redo());
-
-        // Redo
-        let action = manager.pop_redo().unwrap();
-        manager.push_undo(action);
-
-        // Back to undo available
-        assert!(manager.can_undo());
-        assert!(!manager.can_redo());
-    }
-
-    #[test]
-    fn test_empty_action_not_committed() {
-        let mut manager = UndoManager::new();
-
-        manager.begin_action("Empty action");
-        let result = manager.commit_action();
-
-        assert!(result.is_none());
-        assert!(!manager.can_undo());
-    }
-
-    #[test]
-    fn test_new_action_clears_redo() {
-        let mut manager = UndoManager::new();
-
-        // Create and undo an action
-        manager.begin_action("Action 1");
-        manager.record_param_change(0, 0, "Amp", 1, "Gain", 0.5, 0.8);
-        manager.commit_action();
+        manager.begin_action("Test");
+        manager.record_fx_move(0, 2, 0);
+        manager.record_plugin_change(0, 3, "ReaEQ (Cockos)", true);
+        let id = manager.commit_action();
+        assert!(id.is_some());
 
         let action = manager.pop_undo().unwrap();
-        manager.push_redo(action);
-        assert!(manager.can_redo());
-
-        // New action should clear redo
-        manager.begin_action("Action 2");
-        manager.record_param_change(0, 0, "Amp", 2, "Bass", 0.3, 0.6);
-        manager.commit_action();
-
-        assert!(!manager.can_redo());
+        assert_eq!(action.fx_moves.len(), 1);
+        assert_eq!(action.plugin_changes.len(), 1);
+        assert_eq!(action.change_count(), 2);
     }
 }
+

@@ -12,3 +12,6 @@ tauri-app/dist/
 tauri-app/src-tauri/target/
 **/*.pdb
 
+# Additional Rust crates
+toneforge-core/target/
+toneforge-core/Cargo.lock
