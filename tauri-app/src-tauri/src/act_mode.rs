@@ -7,8 +7,9 @@
 //! FULL REAPER access - applies changes!
 
 use crate::ai_client::AIProvider;
-use crate::chain_mapper::{ChainMapper, ChainMapperConfig};
-use crate::parameter_ai::{ParameterAction, ReaperParameter, ReaperPlugin, ReaperSnapshot};
+use crate::parameter_ai::{
+    ParameterAI, ParameterAIOptions, ParameterAction, ReaperParameter, ReaperPlugin, ReaperSnapshot,
+};
 use crate::reaper_client::ReaperClient;
 use crate::tone_ai::ToneAI;
 use crate::tone_sanitizer;
@@ -171,29 +172,53 @@ impl ActMode {
             None,
         );
 
-        // ========== TIER 2: DETERMINISTIC CHAIN MAPPER ==========
-        println!("\n[TIER 2] Running Deterministic Chain Mapper...");
-        emit(progress, "map", "info", "Mapping tone parameters to deterministic actions", None, None);
+        // ========== TIER 2: PARAMETER AI ==========
+        println!("\n[TIER 2] Running Parameter AI...");
+        emit(progress, "map", "info", "Mapping tone parameters to REAPER actions (AI)", None, None);
 
-        let mapper = ChainMapper::new(ChainMapperConfig::default());
-        let mut mapping = mapper.map(&tone_params, &reaper_snapshot);
+        let parameter_ai = ParameterAI::new(self.ai_provider.clone());
+
+        let phase1_opts = ParameterAIOptions {
+            allow_load_plugins: true,
+            max_actions: 180,
+            phase_name: "phase1".to_string(),
+        };
+        let phase1 = parameter_ai
+            .map_parameters_with_options(
+                &tone_params,
+                &reaper_snapshot,
+                &tone_result.tone_description,
+                &phase1_opts,
+                Some("If you include any load_plugin actions, do NOT set parameters on newly loaded plugins in this phase."),
+            )
+            .await
+            .map_err(|e| format!("Parameter AI error: {}", e))?;
+
+        let requires_resnapshot = phase1
+            .actions
+            .iter()
+            .any(|a| matches!(a, ParameterAction::LoadPlugin { .. }));
+
         emit(
             progress,
             "map",
             "info",
-            "Mapper produced action plan",
+            "Parameter AI produced action plan",
             Some(json!({
-                "summary": mapping.summary,
-                "actions": mapping.actions.len(),
-                "requires_resnapshot": mapping.requires_resnapshot,
-                "warnings": mapping.warnings,
+                "summary": phase1.summary,
+                "actions": phase1.actions.len(),
+                "requires_resnapshot": requires_resnapshot,
+                "warnings": phase1.warnings,
             })),
             None,
         );
 
-        // If mapper decided to load plugins, apply load actions first, re-snapshot, then remap once.
-        if mapping.requires_resnapshot {
-            println!("[TIER 2] Applying load actions and refreshing REAPER snapshot...");
+        // Begin undo group early to keep a single action label across multi-pass loads/sets.
+        undo_manager.begin_action(&format!("Tone: {}", user_message));
+
+        // Apply prerequisite actions first if we need to load new plugins.
+        if requires_resnapshot {
+            println!("[TIER 2] Applying prerequisites (loads/enables) and refreshing REAPER snapshot...");
             emit(
                 progress,
                 "apply",
@@ -203,19 +228,17 @@ impl ActMode {
                 None,
             );
 
-            let load_actions: Vec<ParameterAction> = mapping
+            let pre_actions: Vec<ParameterAction> = phase1
                 .actions
                 .iter()
                 .cloned()
                 .filter(|a| matches!(a, ParameterAction::LoadPlugin { .. } | ParameterAction::EnablePlugin { .. }))
                 .collect();
 
-            // Begin undo group early to keep a single action label.
-            undo_manager.begin_action(&format!("Tone: {}", user_message));
-            let load_result = self
-                .apply_parameter_actions(&load_actions, &reaper_snapshot, undo_manager, progress)
+            let pre_result = self
+                .apply_parameter_actions(&pre_actions, &reaper_snapshot, undo_manager, progress)
                 .await
-                .map_err(|e| format!("Failed to apply load actions: {}", e))?;
+                .map_err(|e| format!("Failed to apply prerequisite actions: {}", e))?;
 
             let refreshed = self
                 .collect_reaper_snapshot(track_index)
@@ -234,34 +257,81 @@ impl ActMode {
                 None,
             );
 
-            let mapper_no_load = ChainMapper::new(ChainMapperConfig {
+            let phase2_opts = ParameterAIOptions {
                 allow_load_plugins: false,
-                ..Default::default()
-            });
-            mapping = mapper_no_load.map(&tone_params, &refreshed);
+                max_actions: 220,
+                phase_name: "phase2".to_string(),
+            };
+            let phase2 = match parameter_ai
+                .map_parameters_with_options(
+                    &tone_params,
+                    &refreshed,
+                    &tone_result.tone_description,
+                    &phase2_opts,
+                    Some("Do NOT include load_plugin actions. Use the now-available plugins in the snapshot."),
+                )
+                .await
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    let mut warnings = phase1.warnings.clone();
+                    warnings.push(format!(
+                        "Parameter AI phase2 failed ({}); falling back to phase1 set_param actions for existing plugins",
+                        e
+                    ));
+                    crate::parameter_ai::ParameterAIResult {
+                        summary: phase1.summary.clone(),
+                        actions: phase1
+                            .actions
+                            .iter()
+                            .cloned()
+                            .filter(|a| !matches!(a, ParameterAction::LoadPlugin { .. }))
+                            .collect(),
+                        warnings,
+                    }
+                }
+            };
+
             emit(
                 progress,
                 "map",
                 "info",
-                "Remapped after resnapshot",
+                "Parameter AI remapped after resnapshot",
                 Some(json!({
-                    "summary": mapping.summary,
-                    "actions": mapping.actions.len(),
-                    "warnings": mapping.warnings,
+                    "summary": phase2.summary,
+                    "actions": phase2.actions.len(),
+                    "warnings": phase2.warnings,
                 })),
                 None,
             );
 
+            println!("[TIER 2] Generated {} actions (phase2)", phase2.actions.len());
+            println!("[TIER 2] Summary: {}", phase2.summary);
+
+            println!("\n[APPLY] Applying actions to REAPER...");
+            emit(
+                progress,
+                "apply",
+                "info",
+                "Applying actions to REAPER",
+                Some(json!({ "actions": phase2.actions.len() })),
+                None,
+            );
+
             let mut apply_result = self
-                .apply_parameter_actions(&mapping.actions, &refreshed, undo_manager, progress)
+                .apply_parameter_actions(&phase2.actions, &refreshed, undo_manager, progress)
                 .await
                 .map_err(|e| format!("Failed to apply actions: {}", e))?;
 
-            // Keep a full log for transparency (loads/enables first, then sets).
-            apply_result.logs.splice(0..0, load_result.logs);
-            apply_result.warnings.splice(0..0, load_result.warnings);
+            // Keep a full log for transparency (prereqs first, then sets).
+            apply_result.logs.splice(0..0, pre_result.logs);
+            apply_result.warnings.splice(0..0, pre_result.warnings);
 
-            tone_warnings.extend(apply_result.warnings);
+            let mut all_warnings = Vec::new();
+            all_warnings.extend(phase1.warnings);
+            all_warnings.extend(phase2.warnings);
+            all_warnings.extend(tone_warnings);
+            all_warnings.extend(apply_result.warnings.clone());
 
             if let Some(action_id) = undo_manager.commit_action() {
                 println!("[UNDO] Recorded action: {}", action_id);
@@ -274,32 +344,22 @@ impl ActMode {
                 tone_source: format!("{:?}", tone_result.source),
                 tone_description: tone_result.tone_description,
                 confidence: tone_result.confidence,
-                summary: mapping.summary,
-                actions_count: mapping.actions.len(),
+                summary: phase2.summary,
+                actions_count: pre_actions.len() + phase2.actions.len(),
                 action_logs: apply_result.logs,
-                warnings: {
-                    let mut w = mapping.warnings;
-                    w.extend(tone_warnings);
-                    w
-                },
+                warnings: all_warnings,
             });
         }
 
-        println!("[TIER 2] Generated {} actions", mapping.actions.len());
-        println!("[TIER 2] Summary: {}", mapping.summary);
+        println!("[TIER 2] Generated {} actions", phase1.actions.len());
+        println!("[TIER 2] Summary: {}", phase1.summary);
 
-        let mut all_warnings = mapping.warnings.clone();
-        all_warnings.extend(tone_warnings.clone());
-
-        if !all_warnings.is_empty() {
+        if !(phase1.warnings.is_empty() && tone_warnings.is_empty()) {
             println!("\n[VALIDATION] Warnings:");
-            for warning in &all_warnings {
+            for warning in phase1.warnings.iter().chain(tone_warnings.iter()) {
                 println!("  ⚠️  {}", warning);
             }
         }
-
-        // ========== RECORD FOR UNDO ==========
-        undo_manager.begin_action(&format!("Tone: {}", user_message));
 
         // ========== APPLY ACTIONS TO REAPER ==========
         println!("\n[APPLY] Applying actions to REAPER...");
@@ -308,16 +368,14 @@ impl ActMode {
             "apply",
             "info",
             "Applying actions to REAPER",
-            Some(json!({ "actions": mapping.actions.len() })),
+            Some(json!({ "actions": phase1.actions.len() })),
             None,
         );
 
         let apply_result = self
-            .apply_parameter_actions(&mapping.actions, &reaper_snapshot, undo_manager, progress)
+            .apply_parameter_actions(&phase1.actions, &reaper_snapshot, undo_manager, progress)
             .await
             .map_err(|e| format!("Failed to apply actions: {}", e))?;
-
-        all_warnings.extend(apply_result.warnings.clone());
 
         for log in &apply_result.logs {
             println!("[ACTION] {}", log);
@@ -331,12 +389,17 @@ impl ActMode {
         println!("\n========== ACT MODE: PIPELINE COMPLETE ==========\n");
         emit(progress, "done", "info", "Act mode pipeline complete", None, None);
 
+        let mut all_warnings = Vec::new();
+        all_warnings.extend(phase1.warnings);
+        all_warnings.extend(tone_warnings);
+        all_warnings.extend(apply_result.warnings.clone());
+
         Ok(ActResponse {
             tone_source: format!("{:?}", tone_result.source),
             tone_description: tone_result.tone_description,
             confidence: tone_result.confidence,
-            summary: mapping.summary,
-            actions_count: mapping.actions.len(),
+            summary: phase1.summary,
+            actions_count: phase1.actions.len(),
             action_logs: apply_result.logs,
             warnings: all_warnings,
         })
@@ -520,6 +583,7 @@ impl ActMode {
                     ..
                 } => {
                     let slot = self.reaper_client.add_plugin(*track, plugin_name).await?;
+                    undo_manager.record_plugin_change(*track, slot, plugin_name, true);
                     emit(
                         progress,
                         "apply",

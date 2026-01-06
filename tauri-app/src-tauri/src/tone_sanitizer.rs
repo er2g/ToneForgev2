@@ -18,12 +18,12 @@ pub struct SanitizedTone {
 pub fn sanitize(mut parameters: ToneParameters) -> SanitizedTone {
     let mut warnings = Vec::new();
 
-    parameters.amp = sanitize_unit_map(parameters.amp, "amp", &mut warnings, 32);
-    parameters.reverb = sanitize_unit_map(parameters.reverb, "reverb", &mut warnings, 32);
-    parameters.delay = sanitize_unit_map(parameters.delay, "delay", &mut warnings, 32);
+    parameters.amp = sanitize_unit_map(parameters.amp, "amp", &mut warnings, 64);
+    parameters.reverb = sanitize_unit_map(parameters.reverb, "reverb", &mut warnings, 64);
+    parameters.delay = sanitize_unit_map(parameters.delay, "delay", &mut warnings, 64);
 
-    parameters.eq = sanitize_eq_map(parameters.eq, &mut warnings, 16);
-    parameters.effects = sanitize_effects(parameters.effects, &mut warnings, 5, 24);
+    parameters.eq = sanitize_eq_map(parameters.eq, &mut warnings, 32);
+    parameters.effects = sanitize_effects(parameters.effects, &mut warnings, 12, 48);
 
     SanitizedTone { parameters, warnings }
 }
@@ -86,19 +86,7 @@ fn sanitize_unit_map(
             continue;
         }
 
-        let canonical_key = match canonical_param_key(group, &k) {
-            Some(v) => v,
-            None => {
-                if is_strict_group(group) {
-                    warnings.push(format!(
-                        "{}: dropped unsupported key '{}' (strict vocabulary)",
-                        group, k
-                    ));
-                    continue;
-                }
-                k.clone()
-            }
-        };
+        let canonical_key = canonical_param_key(group, &k).unwrap_or_else(|| k.trim().to_string());
         let clamped = v.clamp(0.0, 1.0);
         if (clamped - v).abs() > f64::EPSILON {
             warnings.push(format!(
@@ -117,13 +105,6 @@ fn sanitize_unit_map(
     }
 
     out
-}
-
-fn is_strict_group(group: &str) -> bool {
-    if group == "delay" || group == "reverb" {
-        return true;
-    }
-    group.starts_with("effect:")
 }
 
 fn sanitize_eq_map(mut map: HashMap<String, f64>, warnings: &mut Vec<String>, max_points: usize) -> HashMap<String, f64> {

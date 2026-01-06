@@ -5,10 +5,26 @@
 //! REAPER plugins with precision, using AI to handle the complex mapping.
 
 use crate::ai_client::AIProvider;
-use crate::tone_encyclopedia::{EffectParameters, ToneParameters};
+use crate::tone_encyclopedia::ToneParameters;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::error::Error;
+
+#[derive(Debug, Clone)]
+pub struct ParameterAIOptions {
+    pub allow_load_plugins: bool,
+    pub max_actions: usize,
+    pub phase_name: String,
+}
+
+impl Default for ParameterAIOptions {
+    fn default() -> Self {
+        Self {
+            allow_load_plugins: true,
+            max_actions: 160,
+            phase_name: "map".to_string(),
+        }
+    }
+}
 
 /// REAPER track snapshot (simplified for parameter mapping)
 #[derive(Debug, Clone, Serialize)]
@@ -91,76 +107,102 @@ impl ParameterAI {
         reaper_snapshot: &ReaperSnapshot,
         tone_description: &str,
     ) -> Result<ParameterAIResult, Box<dyn Error>> {
-        println!("[PARAMETER AI] Mapping parameters for: {}", tone_description);
+        self.map_parameters_with_options(
+            tone_params,
+            reaper_snapshot,
+            tone_description,
+            &ParameterAIOptions::default(),
+            None,
+        )
+        .await
+    }
 
-        let system_prompt = self.build_system_prompt();
-        let user_prompt = self.build_user_prompt(tone_params, reaper_snapshot, tone_description);
-
-        let response = self
-            .ai_provider
-            .generate(&system_prompt, &user_prompt)
-            .await?;
-
-        let result = self.parse_ai_response(&response)?;
-
+    pub async fn map_parameters_with_options(
+        &self,
+        tone_params: &ToneParameters,
+        reaper_snapshot: &ReaperSnapshot,
+        tone_description: &str,
+        options: &ParameterAIOptions,
+        additional_instructions: Option<&str>,
+    ) -> Result<ParameterAIResult, Box<dyn Error>> {
         println!(
-            "[PARAMETER AI] Generated {} actions",
-            result.actions.len()
+            "[PARAMETER AI] Mapping parameters for: {} (phase={}, allow_loads={})",
+            tone_description, options.phase_name, options.allow_load_plugins
         );
 
-        Ok(result)
+        let system_prompt = self.build_system_prompt(options);
+        let user_prompt =
+            self.build_user_prompt(tone_params, reaper_snapshot, tone_description, additional_instructions);
+
+        let response = self.ai_provider.generate(&system_prompt, &user_prompt).await?;
+        let mut parsed = self.parse_ai_response(&response)?;
+
+        let issues = self.validate_actions_strict(&parsed.actions, reaper_snapshot, options);
+        if !issues.is_empty() {
+            println!(
+                "[PARAMETER AI] Validation issues found; attempting repair: {:?}",
+                issues
+            );
+            let repair_prompt = format!(
+                "{user_prompt}\n\nYour previous JSON has validation errors:\n- {}\n\nReturn corrected JSON ONLY.\n\nPrevious output:\n{response}",
+                issues.join("\n- ")
+            );
+            if let Ok(repair_response) = self.ai_provider.generate(&system_prompt, &repair_prompt).await {
+                if let Ok(repair_parsed) = self.parse_ai_response(&repair_response) {
+                    parsed = repair_parsed;
+                }
+            }
+        }
+
+        if parsed.actions.len() > options.max_actions {
+            parsed.warnings.push(format!(
+                "Model returned {} actions; capping to {} for safety",
+                parsed.actions.len(),
+                options.max_actions
+            ));
+            parsed.actions.truncate(options.max_actions);
+        }
+
+        println!("[PARAMETER AI] Generated {} actions", parsed.actions.len());
+        Ok(parsed)
     }
 
     /// Build system prompt for Parameter AI
-    fn build_system_prompt(&self) -> String {
-        r#"You are a professional REAPER parameter mapping AI specialist.
-Your job is to take abstract tone parameters and map them to specific REAPER plugin parameters with precision.
+    fn build_system_prompt(&self, options: &ParameterAIOptions) -> String {
+        let load_rule = if options.allow_load_plugins {
+            "You MAY include 'load_plugin' actions if needed.\nIMPORTANT: If you include any 'load_plugin' actions, do NOT include 'set_param' actions for plugins that are not already present in the provided snapshot. Newly loaded plugins will be mapped in a later phase."
+        } else {
+            "You MUST NOT include any 'load_plugin' actions in this phase. Use only plugins already present in the provided snapshot."
+        };
 
-Given:
-1. Target tone parameters (amp settings, EQ, effects, etc.)
-2. Current REAPER track state (available plugins and their parameters)
+        format!(
+            r#"You are a senior REAPER automation and mix engineer agent.
+Your job is to map abstract tone parameters to concrete REAPER actions.
 
-Your task:
-- Intelligently map each tone parameter to the appropriate REAPER plugin parameter
-- Handle parameter name variations (e.g., "gain" might be "Drive", "Gain", "Input", etc.)
-- Normalize values correctly (0.0-1.0 for most params, dB for EQ)
-- Provide clear reasoning for each mapping
-- If a required plugin doesn't exist, suggest loading it
+Core rules:
+- Only use plugin_index values that exist in the provided snapshot.
+- Only use param_index values that exist under that plugin in the provided snapshot.
+- Keep values in [0.0, 1.0] (normalized).
+- Enable plugins before setting their parameters.
+- Keep the action list under {} actions.
 
-CRITICAL RULES:
-1. Only map to parameters that actually exist in the snapshot
-2. Use fuzzy matching for parameter names (e.g., "treble" matches "High", "Treble", "HF", etc.)
-3. Be conservative with extreme values - avoid clipping
-4. Enable plugins before setting their parameters
-5. Preserve existing parameter values that aren't being changed
+Phase rule:
+{}
 
-Response format (JSON):
-{
-  "summary": "Brief description of what you're doing",
+Output JSON schema:
+{{
+  "summary": "1-2 sentences",
   "actions": [
-    {
-      "type": "set_param",
-      "track": 0,
-      "plugin_index": 0,
-      "param_index": 5,
-      "param_name": "Gain",
-      "value": 0.85,
-      "reason": "Setting amp gain to 0.85 for high-gain tone"
-    },
-    {
-      "type": "enable_plugin",
-      "track": 0,
-      "plugin_index": 1,
-      "plugin_name": "ReaEQ",
-      "reason": "Enabling EQ for tone shaping"
-    }
+    {{"type":"enable_plugin","track":0,"plugin_index":0,"plugin_name":"...","reason":"..."}},
+    {{"type":"set_param","track":0,"plugin_index":0,"param_index":1,"param_name":"...","value":0.5,"reason":"..."}},
+    {{"type":"load_plugin","track":0,"plugin_name":"...","position":null,"reason":"..."}}
   ],
-  "warnings": [
-    "High gain value may cause clipping - monitor levels"
-  ]
-}
+  "warnings": []
+}}
 
-RESPOND ONLY WITH VALID JSON."#.to_string()
+Return ONLY valid JSON. No markdown."#,
+            options.max_actions, load_rule
+        )
     }
 
     /// Build user prompt with tone parameters and REAPER state
@@ -169,6 +211,7 @@ RESPOND ONLY WITH VALID JSON."#.to_string()
         tone_params: &ToneParameters,
         reaper_snapshot: &ReaperSnapshot,
         tone_description: &str,
+        additional_instructions: Option<&str>,
     ) -> String {
         let mut prompt = String::new();
 
@@ -250,6 +293,14 @@ RESPOND ONLY WITH VALID JSON."#.to_string()
         prompt.push_str("\n=== YOUR TASK ===\n");
         prompt.push_str("Map the tone parameters to the available REAPER plugins.\n");
         prompt.push_str("Generate actions to achieve the target tone precisely.\n");
+        if let Some(extra) = additional_instructions
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+        {
+            prompt.push_str("\n=== ADDITIONAL INSTRUCTIONS ===\n");
+            prompt.push_str(extra);
+            prompt.push('\n');
+        }
 
         prompt
     }
@@ -287,7 +338,24 @@ RESPOND ONLY WITH VALID JSON."#.to_string()
         actions: &[ParameterAction],
         reaper_snapshot: &ReaperSnapshot,
     ) -> Vec<String> {
-        let mut warnings = Vec::new();
+        self.validate_actions_strict(actions, reaper_snapshot, &ParameterAIOptions::default())
+    }
+
+    fn validate_actions_strict(
+        &self,
+        actions: &[ParameterAction],
+        reaper_snapshot: &ReaperSnapshot,
+        options: &ParameterAIOptions,
+    ) -> Vec<String> {
+        let mut issues = Vec::new();
+
+        if actions.len() > options.max_actions {
+            issues.push(format!(
+                "Too many actions ({}), must be <= {}",
+                actions.len(),
+                options.max_actions
+            ));
+        }
 
         for action in actions {
             match action {
@@ -298,56 +366,67 @@ RESPOND ONLY WITH VALID JSON."#.to_string()
                     value,
                     ..
                 } => {
-                    // Check if plugin exists
-                    if let Some(plugin) = reaper_snapshot
-                        .plugins
-                        .iter()
-                        .find(|p| p.index == *plugin_index)
-                    {
-                        // Check if parameter exists
-                        if !plugin.parameters.iter().any(|p| p.index == *param_index) {
-                            warnings.push(format!(
-                                "Parameter {} not found in plugin '{}' (index {})",
-                                param_index, plugin.name, plugin_index
-                            ));
-                        }
+                    if *track != reaper_snapshot.track_index {
+                        issues.push(format!(
+                            "SetParameter uses track {} but snapshot track is {}",
+                            track, reaper_snapshot.track_index
+                        ));
+                    }
 
-                        // Check if plugin is enabled
-                        if !plugin.enabled {
-                            warnings.push(format!(
-                                "Plugin '{}' is disabled - should enable before setting parameters",
-                                plugin.name
-                            ));
-                        }
+                    let Some(plugin) = reaper_snapshot.plugins.iter().find(|p| p.index == *plugin_index) else {
+                        issues.push(format!(
+                            "SetParameter references missing plugin_index {}",
+                            plugin_index
+                        ));
+                        continue;
+                    };
 
-                        // Check value range
-                        if *value < 0.0 || *value > 1.0 {
-                            warnings.push(format!(
-                                "Parameter value {} is out of range [0.0, 1.0]",
-                                value
-                            ));
-                        }
-                    } else {
-                        warnings.push(format!(
-                            "Plugin index {} not found in track {}",
-                            plugin_index, track
+                    if !plugin.parameters.iter().any(|p| p.index == *param_index) {
+                        issues.push(format!(
+                            "SetParameter references missing param_index {} on plugin '{}'(#{})",
+                            param_index, plugin.name, plugin_index
+                        ));
+                    }
+
+                    if !(0.0..=1.0).contains(value) {
+                        issues.push(format!(
+                            "SetParameter value {} out of range [0.0, 1.0] for plugin '{}'",
+                            value, plugin.name
                         ));
                     }
                 }
-                ParameterAction::EnablePlugin { plugin_index, .. } => {
-                    if !reaper_snapshot
-                        .plugins
-                        .iter()
-                        .any(|p| p.index == *plugin_index)
-                    {
-                        warnings.push(format!("Plugin index {} not found", plugin_index));
+                ParameterAction::EnablePlugin { track, plugin_index, .. } => {
+                    if *track != reaper_snapshot.track_index {
+                        issues.push(format!(
+                            "EnablePlugin uses track {} but snapshot track is {}",
+                            track, reaper_snapshot.track_index
+                        ));
+                    }
+                    if !reaper_snapshot.plugins.iter().any(|p| p.index == *plugin_index) {
+                        issues.push(format!(
+                            "EnablePlugin references missing plugin_index {}",
+                            plugin_index
+                        ));
                     }
                 }
-                _ => {}
+                ParameterAction::LoadPlugin { track, plugin_name, .. } => {
+                    if *track != reaper_snapshot.track_index {
+                        issues.push(format!(
+                            "LoadPlugin uses track {} but snapshot track is {}",
+                            track, reaper_snapshot.track_index
+                        ));
+                    }
+                    if !options.allow_load_plugins {
+                        issues.push("LoadPlugin is not allowed in this phase".to_string());
+                    }
+                    if plugin_name.trim().is_empty() {
+                        issues.push("LoadPlugin has empty plugin_name".to_string());
+                    }
+                }
             }
         }
 
-        warnings
+        issues
     }
 }
 

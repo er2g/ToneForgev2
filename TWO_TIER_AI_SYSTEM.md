@@ -12,7 +12,7 @@ User Request
      ├─► TIER 1: Tone AI
      │   ├─ Search Encyclopedia (thousands of album tones)
      │   ├─ If found: Use exact tone parameters
-     │   └─ If not found: AI generates tone from knowledge
+     │   └─ If not found: AI generates tone (+ optional supportive FX ideas)
      │
      ├─► REAPER Snapshot (current state)
      │
@@ -20,6 +20,7 @@ User Request
          ├─ Maps tone parameters to REAPER plugins
          ├─ Fuzzy parameter matching (e.g., "gain" → "Drive", "Input", etc.)
          ├─ Precision value mapping
+         ├─ Optional plugin loading + re-snapshot (multi-pass)
          └─ Apply to REAPER
 ```
 

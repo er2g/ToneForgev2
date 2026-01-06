@@ -125,7 +125,7 @@ impl ToneAI {
         context: &str,
     ) -> Result<ToneAIResult, Box<dyn Error>> {
         let system_prompt = r#"You are a professional guitar/bass tone specialist AI.
-Your job is to analyze tone requests and provide precise parameter recommendations.
+Your job is to analyze tone requests and provide precise parameter recommendations, including creative FX chain ideas when helpful.
 
 When given a tone request, respond with a JSON object containing:
 1. A description of the tone
@@ -133,7 +133,8 @@ When given a tone request, respond with a JSON object containing:
 
 REQUIREMENTS:
 - If the user explicitly asks for an effect category (delay, reverb, noise gate, EQ), include that section with at least one meaningful parameter.
-- If the user explicitly says to keep that category OFF/bypassed, leave that section empty (or omit it).
+- If the user explicitly says to keep that category OFF/bypassed, do not include it.
+- If the user does NOT mention effects, you may still add supportive processing (e.g., gate, EQ, cab sim, saturation, compression, ambience) if it helps achieve the tone, unless the user explicitly forbids extra effects.
 
 Example output:
 ```json
@@ -175,7 +176,7 @@ IMPORTANT:
 - All amp/effect parameters must be normalized to 0.0-1.0 range
 - EQ values are in dB (-12.0 to +12.0)
 - Be precise and consistent
-- Do NOT add extra sections or effects that the user did not ask for.
+- Respect explicit "no / without / keep off / bypass" instructions.
 - Respond ONLY with valid JSON
 "#;
 
@@ -217,10 +218,11 @@ IMPORTANT:
             }
         }
 
-        // Prune any unrequested sections/effects to keep the apply-side AI focused and deterministic.
-        let pruned = prune_unrequested(&req, &mut parsed.parameters);
-        if !pruned.is_empty() {
-            println!("[TONE AI] Pruned unrequested sections/effects: {:?}", pruned);
+        // Respect explicit "no/bypass" instructions (but otherwise allow creative additions).
+        let forbidden = detect_forbidden_sections(user_message);
+        let removed = prune_forbidden(&forbidden, &mut parsed.parameters);
+        if !removed.is_empty() {
+            println!("[TONE AI] Removed explicitly forbidden sections/effects: {:?}", removed);
         }
 
         let mix_adj = apply_mix_heuristics(user_message, &mut parsed.parameters);
@@ -338,6 +340,56 @@ fn detect_requested_sections(user_message: &str) -> RequestedSections {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+struct ForbiddenSections {
+    delay: bool,
+    reverb: bool,
+    eq: bool,
+    gate: bool,
+    overdrive: bool,
+    distortion: bool,
+    compressor: bool,
+    chorus: bool,
+    all_effects: bool,
+}
+
+fn detect_forbidden_sections(user_message: &str) -> ForbiddenSections {
+    let s = user_message.to_lowercase();
+
+    fn has_any(s: &str, needles: &[&str]) -> bool {
+        needles.iter().any(|n| s.contains(n))
+    }
+
+    fn has_negation(s: &str, label: &str) -> bool {
+        let patterns = [
+            format!("no {}", label),
+            format!("without {}", label),
+            format!("{} off", label),
+            format!("{} bypass", label),
+            format!("{} bypassed", label),
+            format!("keep {} off", label),
+            format!("keep {} bypass", label),
+            format!("{} kapalı", label),
+        ];
+        patterns.iter().any(|p| s.contains(p))
+    }
+
+    let all_effects = has_any(&s, &["no effects", "without effects", "dry only", "dry signal", "only amp"])
+        || has_any(&s, &["efektsiz", "efekt istemiyorum", "dry"]);
+
+    ForbiddenSections {
+        delay: has_negation(&s, "delay"),
+        reverb: has_negation(&s, "reverb"),
+        eq: has_negation(&s, "eq") || has_negation(&s, "equalizer"),
+        gate: has_negation(&s, "gate") || has_negation(&s, "noise gate"),
+        overdrive: has_negation(&s, "overdrive") || has_negation(&s, "tubescreamer"),
+        distortion: has_negation(&s, "distortion") || has_negation(&s, "fuzz"),
+        compressor: has_negation(&s, "compressor") || has_negation(&s, "compression"),
+        chorus: has_negation(&s, "chorus") || has_negation(&s, "modulation"),
+        all_effects,
+    }
+}
+
 fn validate_sections(req: &RequestedSections, params: &ToneParameters) -> Vec<String> {
     let mut issues = Vec::new();
     if req.delay && params.delay.is_empty() {
@@ -361,23 +413,29 @@ fn validate_sections(req: &RequestedSections, params: &ToneParameters) -> Vec<St
     issues
 }
 
-fn prune_unrequested(req: &RequestedSections, params: &mut ToneParameters) -> Vec<String> {
-    let mut pruned = Vec::new();
+fn prune_forbidden(forbidden: &ForbiddenSections, params: &mut ToneParameters) -> Vec<String> {
+    let mut removed = Vec::new();
 
-    if !req.delay && !params.delay.is_empty() {
+    if forbidden.delay && !params.delay.is_empty() {
         params.delay.clear();
-        pruned.push("delay".to_string());
+        removed.push("delay".to_string());
     }
-    if !req.reverb && !params.reverb.is_empty() {
+    if forbidden.reverb && !params.reverb.is_empty() {
         params.reverb.clear();
-        pruned.push("reverb".to_string());
+        removed.push("reverb".to_string());
     }
-    if !req.eq && !params.eq.is_empty() {
+    if forbidden.eq && !params.eq.is_empty() {
         params.eq.clear();
-        pruned.push("eq".to_string());
+        removed.push("eq".to_string());
     }
 
-    let had_effects = !params.effects.is_empty();
+    if forbidden.all_effects && !params.effects.is_empty() {
+        params.effects.clear();
+        removed.push("effects".to_string());
+        return removed;
+    }
+
+    let before = params.effects.len();
     params.effects.retain(|e| {
         let t = e.effect_type.to_lowercase();
         let is_gate = t.contains("gate");
@@ -386,29 +444,29 @@ fn prune_unrequested(req: &RequestedSections, params: &mut ToneParameters) -> Ve
         let is_compressor = t.contains("compress");
         let is_chorus = t.contains("chorus");
 
-        if is_gate && !req.gate {
+        if is_gate && forbidden.gate {
             return false;
         }
-        if is_overdrive && !req.overdrive {
+        if is_overdrive && forbidden.overdrive {
             return false;
         }
-        if is_distortion && !req.distortion {
+        if is_distortion && forbidden.distortion {
             return false;
         }
-        if is_compressor && !req.compressor {
+        if is_compressor && forbidden.compressor {
             return false;
         }
-        if is_chorus && !req.chorus {
+        if is_chorus && forbidden.chorus {
             return false;
         }
         true
     });
 
-    if had_effects && params.effects.is_empty() && !(req.gate || req.overdrive || req.distortion || req.compressor || req.chorus) {
-        pruned.push("effects".to_string());
+    if params.effects.len() != before {
+        removed.push("effects".to_string());
     }
 
-    pruned
+    removed
 }
 
 fn apply_mix_heuristics(user_message: &str, params: &mut ToneParameters) -> Vec<String> {
